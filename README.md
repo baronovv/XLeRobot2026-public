@@ -1,4 +1,4 @@
-# XLeRobot2026 — Autonomous Meal-Delivery Robot
+<img width="960" height="540" alt="image" src="https://github.com/user-attachments/assets/4db4d733-fb44-4498-ae5c-ddef73e6029a" /># XLeRobot2026 — Autonomous Meal-Delivery Robot
 
 Final code for the **Summer Robotics Challenge 2026**. An XLeRobot (two SO-101 arms on a LeKiwi omni-wheel base, Jetson Orin Nano) performs a simplified version of a nursing-home task: it takes meal orders from a cloud admin panel, drives to the kitchen, places the food on a tray with learned manipulation policies, delivers it to the resident's table and returns to base.
 
@@ -180,3 +180,7 @@ The production map is an RTAB-Map database (`map_room_20260815_v3.db`, 169 nodes
 - Some seat and meal-slot IDs in `locations.yml` were not tested.
 - `navigate_to()` logs the full locations dict on every call.
 - The old API key exists in git history. Generate a new key in the admin panel before making this repository public.
+
+## Workflow diagram  
+<img width="960" height="540" alt="image" src="https://github.com/user-attachments/assets/07a7b049-2eab-43c5-b7cf-dad0cad68afd" />
+
