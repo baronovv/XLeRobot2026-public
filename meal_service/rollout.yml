@@ -1,0 +1,65 @@
+# rollout.yml
+# Hardware + command settings for running policies with lerobot-rollout
+# (see policies.py). Which policy runs for which product is in policies.yml.
+#
+# Ports and camera devices can also be overridden at launch, no edit needed:
+#   python main.py --port right=/dev/ttyACM0 --cam head=/dev/video8
+#
+# /dev/ttyACM* and /dev/videoN get renumbered between boots. Stable names that
+# never change:
+#   ls -l /dev/serial/by-path/     motor boards (by USB hub position)
+#   ls -l /dev/v4l/by-id/          cameras (by model/serial; use *-video-index0)
+
+# Control-loop fps (--fps), dataset fps (--dataset.fps) and camera fps.
+# Must be the fps the policies were recorded/trained at.
+fps: 15
+camera_width: 640
+camera_height: 480
+
+# Physical cameras -> device. A device may also be written as
+#   {path: /dev/..., fourcc: MJPG}   to pass extra opencv camera options.
+cameras:
+  head: /dev/video8          # Orbbec (top). Prefer its /dev/v4l/by-id/... path
+  right_wrist: /dev/v4l/by-id/usb-HBVCAM_Camera_Autodarts_DIY_Cam_HB20250300001-video-index0
+  left_wrist: /dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB2.0_CAM1_USB2.0_CAM1-video-index0
+
+# One entry per arm. `cameras` maps the camera names the policies were trained
+# with (top / wrist) to the physical cameras above.
+arms:
+  right:
+    port: /dev/serial/by-path/platform-3610000.usb-usb-0:2.4.1:1.0
+    id: follower_right_arm_bro
+    cameras: {top: head, wrist: right_wrist}
+  left:
+    port: /dev/serial/by-path/platform-3610000.usb-usb-0:2.4.4:1.0
+    id: my_follower_left
+    cameras: {top: head, wrist: left_wrist}
+
+robot_type: so101_follower
+
+# episodic : your command -- records the run as a 1-episode dataset (video is
+#            encoded after the run, which lengthens each stop)
+# base     : same policy run, nothing recorded (shorter stops)
+strategy: base
+
+# episodic only: --dataset.repo_id=<dataset_user>/rollout_<policy_id>
+# and --dataset.root=<dataset_root_dir>/<policy_id>_<timestamp> (new folder per run)
+dataset_user: ktotomama
+dataset_root_dir: /home/jetson8/lerobot_eval
+
+display_data: false
+
+# If the motors don't match <id>.json when the rollout connects, lerobot asks
+# "Press ENTER to use provided calibration file...".
+#   false: the policy fails with a clear message (safe: also catches a swapped port)
+#   true : answer Enter automatically, like the route scripts do. Only with
+#          by-path ports -- on a swapped port this would run the policy on the
+#          wrong arm.
+auto_confirm_calibration: true
+
+rollout_bin: /home/jetson8/miniconda3/envs/lerobot060/bin/lerobot-rollout   # = `conda activate lerobot060; lerobot-rollout`
+                    # (null: next to the python running main.py, else PATH)
+
+# Appended to every command, e.g. ["--play_sounds=false"] or
+# ["--robot.disable_torque_on_disconnect=false"]
+extra_args: []

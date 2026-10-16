@@ -1,0 +1,66 @@
+# routes.yml
+# Maps the app's named locations onto the physical route scripts.
+#
+# The route scripts (route_part1/2/3.py) are not "go to X" commands -- each
+# one drives one fixed leg between two fixed places:
+#
+#     route_part1.py : base    -> kitchen
+#     route_part2.py : kitchen -> table
+#     route_part3.py : table   -> base
+#
+# So navigation.py models the room as a small directed graph of zones, keeps
+# track of which zone the robot is currently in, and runs whichever sequence
+# of scripts gets it from where it is to where the job wants it. A job that
+# asks for "seat_1" while the robot sits at the plate pickup resolves to a
+# single route_part2.py run; a chained job that asks for "plate_pickup" while
+# the robot is still at the table resolves to route_part3.py then
+# route_part1.py (i.e. it drives home through base and straight back out).
+
+# Where the robot is assumed to be when the app starts. Override at launch
+# with `python main.py --start-zone kitchen` if you're starting it somewhere
+# else -- getting this wrong means the first route runs from the wrong place.
+start_zone: base
+
+# Which location_ids live in which zone. Every location_id used by a job
+# (plate_pickup, each meal's serving_slot, seat_id, home_location) must
+# appear here, and each may appear only once.
+#
+# Locations sharing a zone need no driving between them: the four meal slots
+# are all reachable from where the robot parks in the kitchen, so navigating
+# between them is a no-op (logged as navigate_skipped). If a slot ever needs
+# its own parking spot, give it its own zone here and add the segments that
+# reach it below.
+zones:
+  base:
+    - home_location
+
+  kitchen:
+    - plate_pickup
+    - meal_slot_1
+    - meal_slot_2
+    - meal_slot_3
+    - meal_slot_4
+
+  # All three seats are served from one table stop for now. When per-seat
+  # routes exist, split this into table_1/table_2/table_3 with one seat each
+  # and add a kitchen->table_N and table_N->base segment per seat.
+  table:
+    - seat_1
+    - seat_2
+    - seat_3
+
+# One entry per route script: which zone it starts in, which zone it ends in,
+# and the script that drives it. These are directed -- route_part1.py drives
+# base -> kitchen and is never run in reverse.
+segments:
+  - from: base
+    to: kitchen
+    script: route_part1.py
+
+  - from: kitchen
+    to: table
+    script: route_part2.py
+
+  - from: table
+    to: base
+    script: route_part3.py

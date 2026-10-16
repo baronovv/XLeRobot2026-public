@@ -1,0 +1,26 @@
+diff --git a/XLeVR/vr_monitor.py b/XLeVR/vr_monitor.py
+index 1367799..cbcbbd7 100644
+--- a/XLeVR/vr_monitor.py
++++ b/XLeVR/vr_monitor.py
+@@ -17,7 +17,7 @@ from pathlib import Path
+ from typing import Optional
+ 
+ # Set the absolute path to the xlevr folder
+-XLEVR_PATH = "/home/vec/lerobot/new/XLeVR"
++XLEVR_PATH = "/Users/mihaylt1/Projects/xlerobot/XLeRobot/XLeVR"
+ 
+ def setup_xlevr_environment():
+     """Setup xlevr environment"""
+diff --git a/software/src/teleporators/xlerobot_vr/vr_monitor.py b/software/src/teleporators/xlerobot_vr/vr_monitor.py
+index c35e838..cbcbbd7 100755
+--- a/software/src/teleporators/xlerobot_vr/vr_monitor.py
++++ b/software/src/teleporators/xlerobot_vr/vr_monitor.py
+@@ -17,7 +17,7 @@ from pathlib import Path
+ from typing import Optional
+ 
+ # Set the absolute path to the xlevr folder
+-XLEVR_PATH = "/home/cics/Desktop/codes/projects/XLeRobot/XLeVR"
++XLEVR_PATH = "/Users/mihaylt1/Projects/xlerobot/XLeRobot/XLeVR"
+ 
+ def setup_xlevr_environment():
+     """Setup xlevr environment"""

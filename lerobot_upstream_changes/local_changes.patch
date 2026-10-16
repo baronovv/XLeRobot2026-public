@@ -1,0 +1,4006 @@
+diff --git a/src/ktotomama/test_teleop/meta/info.json b/src/ktotomama/test_teleop/meta/info.json
+new file mode 100644
+index 00000000..827911b5
+--- /dev/null
++++ b/src/ktotomama/test_teleop/meta/info.json
+@@ -0,0 +1,140 @@
++{
++    "codebase_version": "v3.0",
++    "robot_type": "xlerobot",
++    "total_episodes": 0,
++    "total_frames": 0,
++    "total_tasks": 0,
++    "chunks_size": 1000,
++    "data_files_size_in_mb": 100,
++    "video_files_size_in_mb": 500,
++    "fps": 30,
++    "splits": {},
++    "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
++    "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
++    "features": {
++        "action": {
++            "dtype": "float32",
++            "shape": [
++                17
++            ],
++            "names": [
++                "left_arm_shoulder_pan.pos",
++                "left_arm_shoulder_lift.pos",
++                "left_arm_elbow_flex.pos",
++                "left_arm_wrist_flex.pos",
++                "left_arm_wrist_roll.pos",
++                "left_arm_gripper.pos",
++                "right_arm_shoulder_pan.pos",
++                "right_arm_shoulder_lift.pos",
++                "right_arm_elbow_flex.pos",
++                "right_arm_wrist_flex.pos",
++                "right_arm_wrist_roll.pos",
++                "right_arm_gripper.pos",
++                "head_motor_1.pos",
++                "head_motor_2.pos",
++                "x.vel",
++                "y.vel",
++                "theta.vel"
++            ]
++        },
++        "observation.state": {
++            "dtype": "float32",
++            "shape": [
++                17
++            ],
++            "names": [
++                "left_arm_shoulder_pan.pos",
++                "left_arm_shoulder_lift.pos",
++                "left_arm_elbow_flex.pos",
++                "left_arm_wrist_flex.pos",
++                "left_arm_wrist_roll.pos",
++                "left_arm_gripper.pos",
++                "right_arm_shoulder_pan.pos",
++                "right_arm_shoulder_lift.pos",
++                "right_arm_elbow_flex.pos",
++                "right_arm_wrist_flex.pos",
++                "right_arm_wrist_roll.pos",
++                "right_arm_gripper.pos",
++                "head_motor_1.pos",
++                "head_motor_2.pos",
++                "x.vel",
++                "y.vel",
++                "theta.vel"
++            ]
++        },
++        "observation.images.head": {
++            "dtype": "video",
++            "shape": [
++                480,
++                640,
++                3
++            ],
++            "names": [
++                "height",
++                "width",
++                "channels"
++            ]
++        },
++        "observation.images.left": {
++            "dtype": "video",
++            "shape": [
++                480,
++                640,
++                3
++            ],
++            "names": [
++                "height",
++                "width",
++                "channels"
++            ]
++        },
++        "observation.images.right": {
++            "dtype": "video",
++            "shape": [
++                480,
++                640,
++                3
++            ],
++            "names": [
++                "height",
++                "width",
++                "channels"
++            ]
++        },
++        "timestamp": {
++            "dtype": "float32",
++            "shape": [
++                1
++            ],
++            "names": null
++        },
++        "frame_index": {
++            "dtype": "int64",
++            "shape": [
++                1
++            ],
++            "names": null
++        },
++        "episode_index": {
++            "dtype": "int64",
++            "shape": [
++                1
++            ],
++            "names": null
++        },
++        "index": {
++            "dtype": "int64",
++            "shape": [
++                1
++            ],
++            "names": null
++        },
++        "task_index": {
++            "dtype": "int64",
++            "shape": [
++                1
++            ],
++            "names": null
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/src/lerobot/datasets/dataset_tools.py b/src/lerobot/datasets/dataset_tools.py
+index 2fb68dca..2735ba0a 100644
+--- a/src/lerobot/datasets/dataset_tools.py
++++ b/src/lerobot/datasets/dataset_tools.py
+@@ -39,7 +39,6 @@ from lerobot.datasets.aggregate import aggregate_datasets
+ from lerobot.datasets.compute_stats import aggregate_stats
+ from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+ from lerobot.datasets.utils import (
+-    DATA_DIR,
+     DEFAULT_CHUNK_SIZE,
+     DEFAULT_DATA_FILE_SIZE_IN_MB,
+     DEFAULT_DATA_PATH,
+@@ -963,23 +962,28 @@ def _copy_data_with_feature_changes(
+     remove_features: list[str] | None = None,
+ ) -> None:
+     """Copy data while adding or removing features."""
+-    data_dir = dataset.root / DATA_DIR
+-    parquet_files = sorted(data_dir.glob("*/*.parquet"))
++    if dataset.meta.episodes is None:
++        dataset.meta.episodes = load_episodes(dataset.meta.root)
+ 
+-    if not parquet_files:
+-        raise ValueError(f"No parquet files found in {data_dir}")
++    # Map file paths to episode indices to extract chunk/file indices
++    file_to_episodes: dict[Path, set[int]] = {}
++    for ep_idx in range(dataset.meta.total_episodes):
++        file_path = dataset.meta.get_data_file_path(ep_idx)
++        if file_path not in file_to_episodes:
++            file_to_episodes[file_path] = set()
++        file_to_episodes[file_path].add(ep_idx)
+ 
+     frame_idx = 0
+ 
+-    for src_path in tqdm(parquet_files, desc="Processing data files"):
+-        df = pd.read_parquet(src_path).reset_index(drop=True)
+-
+-        relative_path = src_path.relative_to(dataset.root)
+-        chunk_dir = relative_path.parts[1]
+-        file_name = relative_path.parts[2]
++    for src_path in tqdm(sorted(file_to_episodes.keys()), desc="Processing data files"):
++        df = pd.read_parquet(dataset.root / src_path).reset_index(drop=True)
+ 
+-        chunk_idx = int(chunk_dir.split("-")[1])
+-        file_idx = int(file_name.split("-")[1].split(".")[0])
++        # Get chunk_idx and file_idx from the source file's first episode
++        episodes_in_file = file_to_episodes[src_path]
++        first_ep_idx = min(episodes_in_file)
++        src_ep = dataset.meta.episodes[first_ep_idx]
++        chunk_idx = src_ep["data/chunk_index"]
++        file_idx = src_ep["data/file_index"]
+ 
+         if remove_features:
+             df = df.drop(columns=remove_features, errors="ignore")
+@@ -1005,7 +1009,7 @@ def _copy_data_with_feature_changes(
+                         df[feature_name] = feature_slice
+             frame_idx = end_idx
+ 
+-        # Write using the same chunk/file structure as source
++        # Write using the preserved chunk_idx and file_idx from source
+         dst_path = new_meta.root / DEFAULT_DATA_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+         dst_path.parent.mkdir(parents=True, exist_ok=True)
+ 
+diff --git a/src/lerobot/datasets/lerobot_dataset.py b/src/lerobot/datasets/lerobot_dataset.py
+index 48608a80..a6840891 100644
+--- a/src/lerobot/datasets/lerobot_dataset.py
++++ b/src/lerobot/datasets/lerobot_dataset.py
+@@ -430,7 +430,9 @@ class LeRobotDatasetMetadata:
+         video_keys = [video_key] if video_key is not None else self.video_keys
+         for key in video_keys:
+             if not self.features[key].get("info", None):
+-                video_path = self.root / self.video_path.format(video_key=key, chunk_index=0, file_index=0)
++                video_path = self.root / self.video_path.format(
++                    video_key=video_key, chunk_index=0, file_index=0
++                )
+                 self.info["features"][key]["info"] = get_video_info(video_path)
+ 
+     def update_chunk_settings(
+@@ -940,26 +942,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
+         return query_timestamps
+ 
+     def _query_hf_dataset(self, query_indices: dict[str, list[int]]) -> dict:
+-        """
+-        Query dataset for indices across keys, skipping video keys.
+-
+-        Tries column-first [key][indices] for speed, falls back to row-first.
+-
+-        Args:
+-            query_indices: Dict mapping keys to index lists to retrieve
+-
+-        Returns:
+-            Dict with stacked tensors of queried data (video keys excluded)
+-        """
+-        result: dict = {}
+-        for key, q_idx in query_indices.items():
+-            if key in self.meta.video_keys:
+-                continue
+-            try:
+-                result[key] = torch.stack(self.hf_dataset[key][q_idx])
+-            except (KeyError, TypeError, IndexError):
+-                result[key] = torch.stack(self.hf_dataset[q_idx][key])
+-        return result
++        return {
++            key: torch.stack(self.hf_dataset[q_idx][key])
++            for key, q_idx in query_indices.items()
++            if key not in self.meta.video_keys
++        }
+ 
+     def _query_videos(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict[str, torch.Tensor]:
+         """Note: When using data workers (e.g. DataLoader with num_workers>0), do not call this function
+diff --git a/src/lerobot/envs/factory.py b/src/lerobot/envs/factory.py
+index caa6f91e..52c7cbb9 100644
+--- a/src/lerobot/envs/factory.py
++++ b/src/lerobot/envs/factory.py
+@@ -19,7 +19,6 @@ import gymnasium as gym
+ from gymnasium.envs.registration import registry as gym_registry
+ 
+ from lerobot.envs.configs import AlohaEnv, EnvConfig, LiberoEnv, PushtEnv
+-from lerobot.envs.utils import _call_make_env, _download_hub_file, _import_hub_module, _normalize_hub_result
+ 
+ 
+ def make_env_config(env_type: str, **kwargs) -> EnvConfig:
+@@ -34,24 +33,15 @@ def make_env_config(env_type: str, **kwargs) -> EnvConfig:
+ 
+ 
+ def make_env(
+-    cfg: EnvConfig | str,
+-    n_envs: int = 1,
+-    use_async_envs: bool = False,
+-    hub_cache_dir: str | None = None,
+-    trust_remote_code: bool = False,
++    cfg: EnvConfig, n_envs: int = 1, use_async_envs: bool = False
+ ) -> dict[str, dict[int, gym.vector.VectorEnv]]:
+-    """Makes a gym vector environment according to the config or Hub reference.
++    """Makes a gym vector environment according to the config.
+ 
+     Args:
+-        cfg (EnvConfig | str): Either an `EnvConfig` object describing the environment to build locally,
+-            or a Hugging Face Hub repository identifier (e.g. `"username/repo"`). In the latter case,
+-            the repo must include a Python file (usually `env.py`).
++        cfg (EnvConfig): the config of the environment to instantiate.
+         n_envs (int, optional): The number of parallelized env to return. Defaults to 1.
+         use_async_envs (bool, optional): Whether to return an AsyncVectorEnv or a SyncVectorEnv. Defaults to
+             False.
+-        hub_cache_dir (str | None): Optional cache path for downloaded hub files.
+-        trust_remote_code (bool): **Explicit consent** to execute remote code from the Hub.
+-            Default False — must be set to True to import/exec hub `env.py`.
+ 
+     Raises:
+         ValueError: if n_envs < 1
+@@ -64,21 +54,6 @@ def make_env(
+             - For single-task environments: a single suite entry (cfg.type) with task_id=0.
+ 
+     """
+-    # if user passed a hub id string (e.g., "username/repo", "username/repo@main:env.py")
+-    # simplified: only support hub-provided `make_env`
+-    if isinstance(cfg, str):
+-        # _download_hub_file will raise the same RuntimeError if trust_remote_code is False
+-        repo_id, file_path, local_file, revision = _download_hub_file(cfg, trust_remote_code, hub_cache_dir)
+-
+-        # import and surface clear import errors
+-        module = _import_hub_module(local_file, repo_id)
+-
+-        # call the hub-provided make_env
+-        raw_result = _call_make_env(module, n_envs=n_envs, use_async_envs=use_async_envs)
+-
+-        # normalize the return into {suite: {task_id: vec_env}}
+-        return _normalize_hub_result(raw_result)
+-
+     if n_envs < 1:
+         raise ValueError("`n_envs` must be at least 1")
+ 
+diff --git a/src/lerobot/envs/utils.py b/src/lerobot/envs/utils.py
+index 1c7f1542..5584e0bf 100644
+--- a/src/lerobot/envs/utils.py
++++ b/src/lerobot/envs/utils.py
+@@ -13,8 +13,6 @@
+ # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+-import importlib.util
+-import os
+ import warnings
+ from collections.abc import Mapping, Sequence
+ from functools import singledispatch
+@@ -24,7 +22,6 @@ import einops
+ import gymnasium as gym
+ import numpy as np
+ import torch
+-from huggingface_hub import hf_hub_download, snapshot_download
+ from torch import Tensor
+ 
+ from lerobot.configs.types import FeatureType, PolicyFeature
+@@ -198,132 +195,3 @@ def _(envs: Sequence) -> None:
+ @close_envs.register
+ def _(env: gym.Env) -> None:
+     _close_single_env(env)
+-
+-
+-# helper to safely load a python file as a module
+-def _load_module_from_path(path: str, module_name: str | None = None):
+-    module_name = module_name or f"hub_env_{os.path.basename(path).replace('.', '_')}"
+-    spec = importlib.util.spec_from_file_location(module_name, path)
+-    if spec is None:
+-        raise ImportError(f"Could not load module spec for {module_name} from {path}")
+-    module = importlib.util.module_from_spec(spec)
+-    spec.loader.exec_module(module)  # type: ignore
+-    return module
+-
+-
+-# helper to parse hub string (supports "user/repo", "user/repo@rev", optional path)
+-# examples:
+-#   "user/repo" -> will look for env.py at repo root
+-#   "user/repo@main:envs/my_env.py" -> explicit revision and path
+-def _parse_hub_url(hub_uri: str):
+-    # very small parser: [repo_id][@revision][:path]
+-    # repo_id is required (user/repo or org/repo)
+-    revision = None
+-    file_path = "env.py"
+-    if "@" in hub_uri:
+-        repo_and_rev, *rest = hub_uri.split(":", 1)
+-        repo_id, rev = repo_and_rev.split("@", 1)
+-        revision = rev
+-        if rest:
+-            file_path = rest[0]
+-    else:
+-        repo_id, *rest = hub_uri.split(":", 1)
+-        if rest:
+-            file_path = rest[0]
+-    return repo_id, revision, file_path
+-
+-
+-def _download_hub_file(
+-    cfg_str: str,
+-    trust_remote_code: bool,
+-    hub_cache_dir: str | None,
+-) -> tuple[str, str, str, str]:
+-    """
+-    Parse `cfg_str` (hub URL), enforce `trust_remote_code`, and return
+-    (repo_id, file_path, local_file, revision).
+-    """
+-    if not trust_remote_code:
+-        raise RuntimeError(
+-            f"Refusing to execute remote code from the Hub for '{cfg_str}'. "
+-            "Executing hub env modules runs arbitrary Python code from third-party repositories. "
+-            "If you trust this repo and understand the risks, call `make_env(..., trust_remote_code=True)` "
+-            "and prefer pinning to a specific revision: 'user/repo@<commit-hash>:env.py'."
+-        )
+-
+-    repo_id, revision, file_path = _parse_hub_url(cfg_str)
+-
+-    try:
+-        local_file = hf_hub_download(
+-            repo_id=repo_id, filename=file_path, revision=revision, cache_dir=hub_cache_dir
+-        )
+-    except Exception as e:
+-        # fallback to snapshot download
+-        snapshot_dir = snapshot_download(repo_id=repo_id, revision=revision, cache_dir=hub_cache_dir)
+-        local_file = os.path.join(snapshot_dir, file_path)
+-        if not os.path.exists(local_file):
+-            raise FileNotFoundError(
+-                f"Could not find {file_path} in repository {repo_id}@{revision or 'main'}"
+-            ) from e
+-
+-    return repo_id, file_path, local_file, revision
+-
+-
+-def _import_hub_module(local_file: str, repo_id: str) -> Any:
+-    """
+-    Import the downloaded file as a module and surface helpful import error messages.
+-    """
+-    module_name = f"hub_env_{repo_id.replace('/', '_')}"
+-    try:
+-        module = _load_module_from_path(local_file, module_name=module_name)
+-    except ModuleNotFoundError as e:
+-        missing = getattr(e, "name", None) or str(e)
+-        raise ModuleNotFoundError(
+-            f"Hub env '{repo_id}:{os.path.basename(local_file)}' failed to import because the dependency "
+-            f"'{missing}' is not installed locally.\n\n"
+-        ) from e
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to load hub env module '{repo_id}:{os.path.basename(local_file)}'. Import error: {e}\n\n"
+-        ) from e
+-    return module
+-
+-
+-def _call_make_env(module: Any, n_envs: int, use_async_envs: bool) -> Any:
+-    """
+-    Ensure module exposes make_env and call it.
+-    """
+-    if not hasattr(module, "make_env"):
+-        raise AttributeError(
+-            f"The hub module {getattr(module, '__name__', 'hub_module')} must expose `make_env(n_envs=int, use_async_envs=bool)`."
+-        )
+-    entry_fn = module.make_env
+-    return entry_fn(n_envs=n_envs, use_async_envs=use_async_envs)
+-
+-
+-def _normalize_hub_result(result: Any) -> dict[str, dict[int, gym.vector.VectorEnv]]:
+-    """
+-    Normalize possible return types from hub `make_env` into the mapping:
+-      { suite_name: { task_id: vector_env } }
+-    Accepts:
+-      - dict (assumed already correct)
+-      - gym.vector.VectorEnv
+-      - gym.Env (will be wrapped into SyncVectorEnv)
+-    """
+-    if isinstance(result, dict):
+-        return result
+-
+-    # VectorEnv: use its spec.id if available
+-    if isinstance(result, gym.vector.VectorEnv):
+-        suite_name = getattr(result, "spec", None) and getattr(result.spec, "id", None) or "hub_env"
+-        return {suite_name: {0: result}}
+-
+-    # Single Env: wrap into SyncVectorEnv
+-    if isinstance(result, gym.Env):
+-        vec = gym.vector.SyncVectorEnv([lambda: result])
+-        suite_name = getattr(result, "spec", None) and getattr(result.spec, "id", None) or "hub_env"
+-        return {suite_name: {0: vec}}
+-
+-    raise ValueError(
+-        "Hub `make_env` must return either a mapping {suite: {task_id: vec_env}}, "
+-        "a gym.vector.VectorEnv, or a single gym.Env."
+-    )
+diff --git a/src/lerobot/model/SO101Robot.py b/src/lerobot/model/SO101Robot.py
+new file mode 100644
+index 00000000..84ff5a18
+--- /dev/null
++++ b/src/lerobot/model/SO101Robot.py
+@@ -0,0 +1,266 @@
++import math
++import numpy as np
++from typing import List, Union, Tuple
++
++from lerobot.robots.robot import Robot
++# from lerobot.robots.so101_follower.config_so101_follower import SO101FollowerConfig
++from lerobot.robots.so101_follower.config_so101_follower import SO101FollowerConfig
++from lerobot.robots.utils import make_robot_from_config
++import numpy as np
++from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
++from lerobot.cameras import ColorMode, Cv2Rotation
++from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
++
++def create_real_robot(port, camera_index, uid: str = "so101") -> Robot:
++    """Wrapper function to map string UIDS to real robot configurations. Primarily for saving a bit of code for users when they fork the repository. They can just edit the camera, id etc. settings in this one file."""
++    if uid == "so101":
++        robot_config = SO101FollowerConfig(
++            port= port,
++            use_degrees=True,
++            # for phone camera users you can use the commented out setting below
++            cameras = {
++                "base_camera": OpenCVCameraConfig(index_or_path= camera_index,  # Replace with camera index found in find_cameras.py
++                fps=30,
++                width=640,
++                height=480,
++                color_mode=ColorMode.RGB,
++                rotation=Cv2Rotation.NO_ROTATION)
++            },
++            # for intel realsense camera users you need to modify the serial number or name for your own hardware
++            # cameras={
++            #     "base_camera": RealSenseCameraConfig(serial_number_or_name="146322070293", fps=30, width=640, height=480)
++            # },
++            id="robot1",
++        )
++        real_robot = make_robot_from_config(robot_config)
++        return real_robot
++
++
++class SO101Kinematics:
++    """
++    A class to represent the kinematics of a SO101 robot arm.
++    All public methods use degrees for input/output.
++    """
++
++    def __init__(self, l1=0.1159, l2=0.1350):
++        self.l1 = l1  # Length of the first link (upper arm)
++        self.l2 = l2  # Length of the second link (lower arm)
++
++    def inverse_kinematics(self, x, y, l1=None, l2=None):
++        """
++        Calculate inverse kinematics for a 2-link robotic arm, considering joint offsets
++        
++        Parameters:
++            x: End effector x coordinate
++            y: End effector y coordinate
++            l1: Upper arm length (default uses instance value)
++            l2: Lower arm length (default uses instance value)
++            
++        Returns:
++            joint2_deg, joint3_deg: Joint angles in degrees (shoulder_lift, elbow_flex)
++        """
++        # Use instance values if not provided
++        if l1 is None:
++            l1 = self.l1
++        if l2 is None:
++            l2 = self.l2
++            
++        # Calculate joint2 and joint3 offsets in theta1 and theta2
++        theta1_offset = math.atan2(0.028, 0.11257)  # theta1 offset when joint2=0
++        theta2_offset = math.atan2(0.0052, 0.1349) + theta1_offset  # theta2 offset when joint3=0
++        
++        # Calculate distance from origin to target point
++        r = math.sqrt(x**2 + y**2)
++        r_max = l1 + l2  # Maximum reachable distance
++        
++        # If target point is beyond maximum workspace, scale it to the boundary
++        if r > r_max:
++            scale_factor = r_max / r
++            x *= scale_factor
++            y *= scale_factor
++            r = r_max
++        
++        # If target point is less than minimum workspace (|l1-l2|), scale it
++        r_min = abs(l1 - l2)
++        if r < r_min and r > 0:
++            scale_factor = r_min / r
++            x *= scale_factor
++            y *= scale_factor
++            r = r_min
++        
++        # Use law of cosines to calculate theta2
++        cos_theta2 = -(r**2 - l1**2 - l2**2) / (2 * l1 * l2)
++        
++        # Clamp cos_theta2 to valid range [-1, 1] to avoid domain errors
++        cos_theta2 = max(-1.0, min(1.0, cos_theta2))
++        
++        # Calculate theta2 (elbow angle)
++        theta2 = math.pi - math.acos(cos_theta2)
++        
++        # Calculate theta1 (shoulder angle)
++        beta = math.atan2(y, x)
++        gamma = math.atan2(l2 * math.sin(theta2), l1 + l2 * math.cos(theta2))
++        theta1 = beta + gamma
++        
++        # Convert theta1 and theta2 to joint2 and joint3 angles
++        joint2 = theta1 + theta1_offset
++        joint3 = theta2 + theta2_offset
++        
++        # Ensure angles are within URDF limits
++        joint2 = max(-0.1, min(3.45, joint2))
++        joint3 = max(-0.2, min(math.pi, joint3))
++        
++        # Convert from radians to degrees
++        joint2_deg = math.degrees(joint2)
++        joint3_deg = math.degrees(joint3)
++
++        # Apply coordinate system transformation
++        joint2_deg = 90 - joint2_deg
++        joint3_deg = joint3_deg - 90
++        
++        return joint2_deg, joint3_deg
++    
++    def forward_kinematics(self, joint2_deg, joint3_deg, l1=None, l2=None):
++        """
++        Calculate forward kinematics for a 2-link robotic arm
++        
++        Parameters:
++            joint2_deg: Shoulder lift joint angle in degrees
++            joint3_deg: Elbow flex joint angle in degrees
++            l1: Upper arm length (default uses instance value)
++            l2: Lower arm length (default uses instance value)
++            
++        Returns:
++            x, y: End effector coordinates
++        """
++        # Use instance values if not provided
++        if l1 is None:
++            l1 = self.l1
++        if l2 is None:
++            l2 = self.l2
++            
++        # Convert degrees to radians and apply inverse transformation
++        joint2_rad = math.radians(90 - joint2_deg)
++        joint3_rad = math.radians(joint3_deg + 90)
++        
++        # Calculate joint2 and joint3 offsets
++        theta1_offset = math.atan2(0.028, 0.11257)
++        theta2_offset = math.atan2(0.0052, 0.1349) + theta1_offset
++        
++        # Convert joint angles back to theta1 and theta2
++        theta1 = joint2_rad - theta1_offset
++        theta2 = joint3_rad - theta2_offset
++        
++        # Forward kinematics calculations
++        x = l1 * math.cos(theta1) + l2 * math.cos(theta1 + theta2 - math.pi)
++        y = l1 * math.sin(theta1) + l2 * math.sin(theta1 + theta2 - math.pi)
++        
++        return x, y
++
++    
++    def generate_sinusoidal_velocity_trajectory(
++        self,
++        start_point: Union[List[float], np.ndarray],
++        end_point: Union[List[float], np.ndarray],
++        control_freq: float = 100.0,  # Hz
++        total_time: float = 5.0,      # seconds
++        velocity_amplitude: float = 1.0,  # m/s
++        velocity_period: float = 2.0,     # seconds
++        phase_offset: float = 0.0         # radians
++    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
++        """
++        Generate a straight-line trajectory with sinusoidal velocity profile.
++        
++        Parameters:
++        -----------
++        start_point : array-like
++            3D coordinates of starting point [x, y, z]
++        end_point : array-like  
++            3D coordinates of ending point [x, y, z]
++        control_freq : float
++            Control frequency in Hz
++        total_time : float
++            Total trajectory time in seconds
++        velocity_amplitude : float
++            Amplitude of velocity oscillation in m/s
++        velocity_period : float
++            Period of velocity oscillation in seconds
++        phase_offset : float
++            Phase offset in radians
++            
++        Returns:
++        --------
++        trajectory : np.ndarray
++            Array of 3D positions (n_points, 3)
++        velocities : np.ndarray
++            Array of velocity magnitudes (n_points,)
++        time_array : np.ndarray
++            Time array (n_points,)
++        """
++        
++        # Convert to numpy arrays
++        start = np.array(start_point, dtype=float)
++        end = np.array(end_point, dtype=float)
++        
++        # Calculate direction and distance
++        direction_vector = end - start
++        total_distance = np.linalg.norm(direction_vector)
++        direction_unit = direction_vector / total_distance if total_distance > 0 else np.zeros(3)
++        
++        # Generate time array
++        dt = 1.0 / control_freq
++        n_points = int(total_time * control_freq) + 1
++        time_array = np.linspace(0, total_time, n_points)
++        
++        # Calculate angular frequency
++        omega = 2 * np.pi / velocity_period
++        
++        # Generate sinusoidal velocity profile
++        base_velocity = total_distance / total_time  # Average velocity needed
++        velocities = base_velocity + velocity_amplitude * np.sin(omega * time_array + phase_offset)
++        
++        # Ensure non-negative velocities (optional - remove if negative velocities are desired)
++        velocities = np.maximum(velocities, 0.1 * base_velocity)
++        
++        # Integrate velocity to get position along the path
++        positions_1d = np.zeros(n_points)
++        for i in range(1, n_points):
++            positions_1d[i] = positions_1d[i-1] + velocities[i-1] * dt
++        
++        # Scale positions to fit exactly between start and end points
++        if positions_1d[-1] > 0:
++            positions_1d = positions_1d * (total_distance / positions_1d[-1])
++        
++        # Convert 1D positions to 3D trajectory
++        trajectory = np.zeros((n_points, 3))
++        for i in range(n_points):
++            progress = positions_1d[i] / total_distance if total_distance > 0 else 0
++            trajectory[i] = start + progress * direction_vector
++        
++        return trajectory, velocities, time_array
++    # Example usage
++    # if __name__ == "__main__":
++    #     # Define start and end points
++    #     start = [0, 0, 0]
++    #     end = [5, 3, 2]
++        
++    #     # Generate trajectory
++    #     trajectory, velocities, time_array = generate_sinusoidal_velocity_trajectory(
++    #         start_point=start,
++    #         end_point=end,
++    #         control_freq=100.0,
++    #         total_time=6.0,
++    #         velocity_amplitude=0.8,
++    #         velocity_period=1.5,
++    #         phase_offset=0
++    #     )
++        
++    #     print(f"Generated {len(trajectory)} trajectory points")
++    #     print(f"Total distance: {np.linalg.norm(np.array(end) - np.array(start)):.3f}")
++    #     print(f"Time duration: {time_array[-1]:.2f} seconds")
++    #     print(f"Average velocity: {velocities.mean():.3f} m/s")
++    #     print(f"Velocity range: {velocities.min():.3f} to {velocities.max():.3f} m/s")
++        
++    #     print("\nFirst few trajectory points:")
++    #     for i in range(0, min(10, len(trajectory)), 2):
++    #         print(f"t={time_array[i]:.2f}s: pos=[{trajectory[i,0]:.3f}, {trajectory[i,1]:.3f}, {trajectory[i,2]:.3f}], vel={velocities[i]:.3f} m/s")
+diff --git a/src/lerobot/model/__init__.py b/src/lerobot/model/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/src/lerobot/policies/factory.py b/src/lerobot/policies/factory.py
+index eb626675..bdad5cbb 100644
+--- a/src/lerobot/policies/factory.py
++++ b/src/lerobot/policies/factory.py
+@@ -38,7 +38,6 @@ from lerobot.policies.sac.configuration_sac import SACConfig
+ from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
+ from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
+ from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
+-from lerobot.policies.utils import validate_visual_features_consistency
+ from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
+ from lerobot.processor import PolicyAction, PolicyProcessorPipeline
+ from lerobot.processor.converters import (
+@@ -421,7 +420,20 @@ def make_policy(
+     # policy = torch.compile(policy, mode="reduce-overhead")
+ 
+     if not rename_map:
+-        validate_visual_features_consistency(cfg, features)
+-        # TODO: (jadechoghari) - add a check_state(cfg, features) and check_action(cfg, features)
+-
++        expected_features = set(cfg.input_features.keys()) | set(cfg.output_features.keys())
++        provided_features = set(features.keys())
++        if expected_features and provided_features != expected_features:
++            missing = expected_features - provided_features
++            extra = provided_features - expected_features
++            # TODO (jadechoghari): provide a dynamic rename map suggestion to the user.
++            raise ValueError(
++                f"Feature mismatch between dataset/environment and policy config.\n"
++                f"- Missing features: {sorted(missing) if missing else 'None'}\n"
++                f"- Extra features: {sorted(extra) if extra else 'None'}\n\n"
++                f"Please ensure your dataset and policy use consistent feature names.\n"
++                f"If your dataset uses different observation keys (e.g., cameras named differently), "
++                f"use the `--rename_map` argument, for example:\n"
++                f'  --rename_map=\'{{"observation.images.left": "observation.images.camera1", '
++                f'"observation.images.top": "observation.images.camera2"}}\''
++            )
+     return policy
+diff --git a/src/lerobot/policies/utils.py b/src/lerobot/policies/utils.py
+index c4ca35b7..21b39a80 100644
+--- a/src/lerobot/policies/utils.py
++++ b/src/lerobot/policies/utils.py
+@@ -22,8 +22,6 @@ import numpy as np
+ import torch
+ from torch import nn
+ 
+-from lerobot.configs.policies import PreTrainedConfig
+-from lerobot.configs.types import FeatureType, PolicyFeature
+ from lerobot.datasets.utils import build_dataset_frame
+ from lerobot.processor import PolicyAction, RobotAction, RobotObservation
+ from lerobot.utils.constants import ACTION, OBS_STR
+@@ -200,42 +198,3 @@ def make_robot_action(action_tensor: PolicyAction, ds_features: dict[str, dict])
+         f"{name}": float(action_tensor[i]) for i, name in enumerate(action_names)
+     }
+     return act_processed_policy
+-
+-
+-def raise_feature_mismatch_error(
+-    provided_features: set[str],
+-    expected_features: set[str],
+-) -> None:
+-    """
+-    Raises a standardized ValueError for feature mismatches between dataset/environment and policy config.
+-    """
+-    missing = expected_features - provided_features
+-    extra = provided_features - expected_features
+-    # TODO (jadechoghari): provide a dynamic rename map suggestion to the user.
+-    raise ValueError(
+-        f"Feature mismatch between dataset/environment and policy config.\n"
+-        f"- Missing features: {sorted(missing) if missing else 'None'}\n"
+-        f"- Extra features: {sorted(extra) if extra else 'None'}\n\n"
+-        f"Please ensure your dataset and policy use consistent feature names.\n"
+-        f"If your dataset uses different observation keys (e.g., cameras named differently), "
+-        f"use the `--rename_map` argument, for example:\n"
+-        f'  --rename_map=\'{{"observation.images.left": "observation.images.camera1", '
+-        f'"observation.images.top": "observation.images.camera2"}}\''
+-    )
+-
+-
+-def validate_visual_features_consistency(
+-    cfg: PreTrainedConfig,
+-    features: dict[str, PolicyFeature],
+-) -> None:
+-    """
+-    Validates visual feature consistency between a policy config and provided dataset/environment features.
+-
+-    Args:
+-        cfg (PreTrainedConfig): The model or policy configuration containing input_features and type.
+-        features (Dict[str, PolicyFeature]): A mapping of feature names to PolicyFeature objects.
+-    """
+-    expected_visuals = {k for k, v in cfg.input_features.items() if v.type == FeatureType.VISUAL}
+-    provided_visuals = {k for k, v in features.items() if v.type == FeatureType.VISUAL}
+-    if not provided_visuals.issubset(expected_visuals):
+-        raise_feature_mismatch_error(provided_visuals, expected_visuals)
+diff --git a/src/lerobot/record.py b/src/lerobot/record.py
+new file mode 100644
+index 00000000..3d81e119
+--- /dev/null
++++ b/src/lerobot/record.py
+@@ -0,0 +1,565 @@
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""
++Records a dataset. Actions for the robot can be either generated by teleoperation or by a policy.
++
++Example:
++
++```shell
++lerobot-record \
++    --robot.type=so100_follower \
++    --robot.port=/dev/tty.usbmodem58760431541 \
++    --robot.cameras="{laptop: {type: opencv, camera_index: 0, width: 640, height: 480}}" \
++    --robot.id=black \
++    --dataset.repo_id=aliberts/record-test \
++    --dataset.num_episodes=2 \
++    --dataset.single_task="Grab the cube" \
++    # <- Teleop optional if you want to teleoperate to record or in between episodes with a policy \
++    # --teleop.type=so100_leader \
++    # --teleop.port=/dev/tty.usbmodem58760431551 \
++    # --teleop.id=blue \
++    # <- Policy optional if you want to record with a policy \
++    # --policy.path=${HF_USER}/my_policy \
++```
++
++Example recording with bimanual so100:
++```shell
++lerobot-record \
++  --robot.type=bi_so100_follower \
++  --robot.left_arm_port=/dev/tty.usbmodem5A460851411 \
++  --robot.right_arm_port=/dev/tty.usbmodem5A460812391 \
++  --robot.id=bimanual_follower \
++  --robot.cameras='{
++    left: {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30},
++    top: {"type": "opencv", "index_or_path": 1, "width": 640, "height": 480, "fps": 30},
++    right: {"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30}
++  }' \
++  --teleop.type=bi_so100_leader \
++  --teleop.left_arm_port=/dev/tty.usbmodem5A460828611 \
++  --teleop.right_arm_port=/dev/tty.usbmodem5A460826981 \
++  --teleop.id=bimanual_leader \
++  --display_data=true \
++  --dataset.repo_id=${HF_USER}/bimanual-so100-handover-cube \
++  --dataset.num_episodes=25 \
++  --dataset.single_task="Grab and handover the red cube to the other arm"
++```
++"""
++
++import logging
++import time
++import numpy as np
++import torch
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from pprint import pformat
++from collections import deque
++
++from lerobot.cameras import (  # noqa: F401
++    CameraConfig,  # noqa: F401
++)
++from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
++from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
++from lerobot.configs import parser
++from lerobot.configs.policies import PreTrainedConfig
++from lerobot.datasets.image_writer import safe_stop_image_writer
++from lerobot.datasets.lerobot_dataset import LeRobotDataset
++from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
++from lerobot.datasets.video_utils import VideoEncodingManager
++from lerobot.policies.factory import make_policy
++from lerobot.policies.pretrained import PreTrainedPolicy
++from lerobot.robots import (  # noqa: F401
++    Robot,
++    RobotConfig,
++    bi_so100_follower,
++    hope_jr,
++    koch_follower,
++    make_robot_from_config,
++    so100_follower,
++    so101_follower,
++    xlerobot,
++)
++from lerobot.teleoperators import (  # noqa: F401
++    Teleoperator,
++    TeleoperatorConfig,
++    bi_so100_leader,
++    homunculus,
++    koch_leader,
++    make_teleoperator_from_config,
++    so100_leader,
++    so101_leader,
++    xlerobot_vr,
++)
++from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
++from lerobot.teleoperators.xlerobot_vr.xlerobot_vr import XLerobotVRTeleop, init_vr_listener
++from lerobot.utils.control_utils import (
++    init_keyboard_listener,
++    is_headless,
++    predict_action,
++    sanity_check_dataset_name,
++    sanity_check_dataset_robot_compatibility,
++)
++# from lerobot.utils.robot_utils import busy_wait
++from lerobot.utils.robot_utils import precise_sleep
++from lerobot.utils.utils import (
++    get_safe_torch_device,
++    init_logging,
++    log_say,
++)
++from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
++
++GLOBAL_BACK_GOAL = np.array([-99.1578, -67.1670, 21.1723, 99.1829, 5.7592, 0.8043, 99.8230, -67.0739, 21.0242, 99.1322, -0.6326, 0.4778])
++GLOBAL_OPEN_GOAL = np.array([-99.1578, -67.1670, 21.1723, 99.1829, 5.7592, 36, 99.8230, -67.0739, 21.0242, 99.1322, -0.6326, 36])
++def reset_follower_position(robot, target_position, steps=50, delay=0.015, start_position=None):
++    """
++    Move the robot smoothly to the target position and generate a recordable action sequence.
++    
++    Args:
++        robot: The robot object (must have attributes bus1 and bus2).
++        target_position: Target position array [left_arm_joints..., right_arm_joints...].
++        steps: Number of trajectory steps (default: 150).
++        delay: Delay time per step in milliseconds (default: 15 ms).
++    
++    Returns:
++        list: The action sequence, where each element is an action dictionary.
++    """
++    # Read the current position
++
++    left_current_position_dict = robot.bus1.sync_read("Present_Position")
++    right_current_position_dict = robot.bus2.sync_read("Present_Position")
++    if start_position is not None:
++        left_current_position, right_current_position = start_position[0:6], start_position[6:12]
++    else:
++        left_current_position = np.array(
++            [left_current_position_dict[name] for name in left_current_position_dict], dtype=np.float32
++        )
++        right_current_position = np.array(
++            [right_current_position_dict[name] for name in right_current_position_dict], dtype=np.float32
++        )
++
++    left_target_position, right_target_position = target_position[0:6], target_position[6:12]
++    
++    if start_position is None:
++        left_trajectory = torch.from_numpy(
++            np.linspace(left_current_position, left_target_position, steps)
++        )
++        right_trajectory = torch.from_numpy(
++            np.linspace(right_current_position[:-3], right_target_position, steps)
++        )
++    else:
++        left_trajectory = torch.from_numpy(
++            np.linspace(left_current_position, left_target_position, steps)
++        )
++        right_trajectory = torch.from_numpy(
++            np.linspace(right_current_position, right_target_position, steps)
++        )
++    
++    # generate action sequence
++    action_sequence = []
++    left_current_position_dict = {f"{k}.pos" for k in left_current_position_dict}
++    left_current_position_dict = [
++        'left_arm_shoulder_pan.pos',
++        'left_arm_shoulder_lift.pos',
++        'left_arm_elbow_flex.pos',
++        'left_arm_wrist_flex.pos',
++        'left_arm_wrist_roll.pos',
++        'left_arm_gripper.pos',
++    ]
++    right_current_position_dict = [
++        'right_arm_shoulder_pan.pos',
++        'right_arm_shoulder_lift.pos',
++        'right_arm_elbow_flex.pos',
++        'right_arm_wrist_flex.pos',
++        'right_arm_wrist_roll.pos',
++        'right_arm_gripper.pos'
++    ]
++    for left_pose, right_pose in zip(left_trajectory, right_trajectory):
++        left_action_dict = dict(zip(left_current_position_dict, left_pose, strict=False))
++        right_action_dict = dict(zip(right_current_position_dict, right_pose, strict=False))
++        base_action_dict = {
++            "x.vel": 0,
++            "y.vel": 0,
++            "theta.vel": 0,
++        }
++        
++        action_dict = {**left_action_dict, **right_action_dict, **base_action_dict}
++        action_sequence.append(action_dict)
++    
++    return action_sequence
++
++def queue_reset_actions(action_queue, robot, target_position, steps=50, start_position=None):
++    """
++    Add a reset action sequence to the queue.
++    
++    Args:
++        action_queue: The action queue.
++        robot: The robot object.
++        target_position: The target position.
++        steps: Number of trajectory steps.
++    """
++
++    action_sequence = reset_follower_position(robot, target_position, steps, start_position=start_position)
++    action_queue.extend(action_sequence)
++    logging.info(f"Queued {len(action_sequence)} reset actions")
++
++
++@dataclass
++class DatasetRecordConfig:
++    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
++    repo_id: str
++    # A short but accurate description of the task performed during the recording (e.g. "Pick the Lego block and drop it in the box on the right.")
++    single_task: str
++    # Root directory where the dataset will be stored (e.g. 'dataset/path').
++    root: str | Path | None = None
++    # Limit the frames per second.
++    fps: int = 30
++    # Number of seconds for data recording for each episode.
++    episode_time_s: int | float = 60
++    # Number of seconds for resetting the environment after each episode.
++    reset_time_s: int | float = 10
++    # Number of episodes to record.
++    num_episodes: int = 50
++    # Encode frames in the dataset into video
++    video: bool = True
++    # Upload dataset to Hugging Face hub.
++    push_to_hub: bool = False
++    # Upload on private repository on the Hugging Face hub.
++    private: bool = False
++    # Add tags to your dataset on the hub.
++    tags: list[str] | None = None
++    # Number of subprocesses handling the saving of frames as PNG. Set to 0 to use threads only;
++    # set to ≥1 to use subprocesses, each using threads to write images. The best number of processes
++    # and threads depends on your system. We recommend 4 threads per camera with 0 processes.
++    # If fps is unstable, adjust the thread count. If still unstable, try using 1 or more subprocesses.
++    num_image_writer_processes: int = 0
++    # Number of threads writing the frames as png images on disk, per camera.
++    # Too many threads might cause unstable teleoperation fps due to main thread being blocked.
++    # Not enough threads might cause low camera fps.
++    num_image_writer_threads_per_camera: int = 4
++    # Number of episodes to record before batch encoding videos
++    # Set to 1 for immediate encoding (default behavior), or higher for batched encoding
++    video_encoding_batch_size: int = 1
++
++    def __post_init__(self):
++        if self.single_task is None:
++            raise ValueError("You need to provide a task as argument in `single_task`.")
++
++
++@dataclass
++class RecordConfig:
++    robot: RobotConfig
++    dataset: DatasetRecordConfig
++    # Whether to control the robot with a teleoperator
++    teleop: TeleoperatorConfig | None = None
++    # Whether to control the robot with a policy
++    policy: PreTrainedConfig | None = None
++    # Display all cameras on screen
++    display_data: bool = False
++    # Use vocal synthesis to read events.
++    play_sounds: bool = True
++    # Resume recording on an existing dataset.
++    resume: bool = False
++
++    def __post_init__(self):
++        # HACK: We parse again the cli args here to get the pretrained path if there was one.
++        policy_path = parser.get_path_arg("policy")
++        if policy_path:
++            cli_overrides = parser.get_cli_overrides("policy")
++            self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=cli_overrides)
++            self.policy.pretrained_path = policy_path
++
++        if self.teleop is None and self.policy is None:
++            raise ValueError("Choose a policy, a teleoperator or both to control the robot")
++
++    @classmethod
++    def __get_path_fields__(cls) -> list[str]:
++        """This enables the parser to load config from the policy using `--policy.path=local/dir`"""
++        return ["policy"]
++
++
++@safe_stop_image_writer
++def record_loop(
++    robot: Robot,
++    events: dict,
++    fps: int,
++    dataset: LeRobotDataset | None = None,
++    teleop: Teleoperator | list[Teleoperator] | None = None,
++    policy: PreTrainedPolicy | None = None,
++    control_time_s: int | None = None,
++    single_task: str | None = None,
++    display_data: bool = False,
++    action_queue: deque | None = None,
++):
++    if dataset is not None and dataset.fps != fps:
++        raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
++
++    teleop_arm = teleop_keyboard = None
++    if isinstance(teleop, list):
++        teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
++        teleop_arm = next(
++            (
++                t
++                for t in teleop
++                if isinstance(
++                    t,
++                    (
++                        so100_leader.SO100Leader,
++                        so101_leader.SO101Leader,
++                        koch_leader.KochLeader,
++                    ),
++                )
++            ),
++            None,
++        )
++
++        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
++            raise ValueError(
++                "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
++            )
++
++    # if policy is given it needs cleaning up
++    if policy is not None:
++        policy.reset()
++
++    # Init action queue
++    if action_queue is None:
++        action_queue = deque()
++
++    timestamp = 0
++    start_episode_t = time.perf_counter()
++    while timestamp < control_time_s:
++        start_loop_t = time.perf_counter()
++
++        current_events = teleop.get_vr_events()
++        events.update(current_events)
++
++
++        if events["exit_early"]:
++            events["exit_early"] = False
++            log_say("Exit early")
++            time.sleep(1)
++            break
++
++        try:
++            observation = robot.get_observation()
++        except TimeoutError as e:
++            logging.warning(f"Camera timeout: {e}. Skipping this frame.")
++            continue  # skip current
++
++        if policy is not None or dataset is not None:
++            observation_frame = build_dataset_frame(dataset.features, observation, prefix="observation")
++        
++        # if queue not None, use the action
++        if action_queue:
++            action = action_queue.popleft()
++            if action == {}: # flag for the reset
++                action = teleop.move_to_zero_position(robot)
++
++        elif policy is not None:
++            action_values = predict_action(
++                observation_frame,
++                policy,
++                get_safe_torch_device(policy.config.device),
++                policy.config.use_amp,
++                task=single_task,
++                robot_type=robot.robot_type,
++            )
++            action = {key: action_values[i].item() for i, key in enumerate(robot.action_features)}
++        elif policy is None and isinstance(teleop, Teleoperator):
++            action = teleop.get_action(observation, robot)
++        elif policy is None and isinstance(teleop, list):
++            # TODO(pepijn, steven): clean the record loop for use of multiple robots (possibly with pipeline)
++            arm_action = teleop_arm.get_action()
++            arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
++
++            keyboard_action = teleop_keyboard.get_action()
++            base_action = robot._from_keyboard_to_base_action(keyboard_action)
++
++            action = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
++        else:
++            logging.info(
++                "No policy or teleoperator provided, skipping action generation."
++                "This is likely to happen when resetting the environment without a teleop device."
++                "The robot won't be at its rest position at the start of the next episode."
++            )
++            continue
++
++        # Action can eventually be clipped using `max_relative_target`,
++        # so action actually sent is saved in the dataset.
++
++        if events["reset_position"]:
++            logging.info("Rest to the zero position of robot")
++            log_say("Reset position")
++            action = teleop.move_to_zero_position(robot)
++            teleop.vr_event_handler.events['reset_position'] = False
++            events["reset_position"] = False 
++        elif events["back_position"]:
++            logging.info("Back to the backet position of robot")
++            log_say("Back backet position")
++            if len(action_queue) < 10:  
++                # Place in back and reset
++                queue_reset_actions(action_queue, robot, GLOBAL_BACK_GOAL, steps=30)
++                queue_reset_actions(action_queue, robot, GLOBAL_OPEN_GOAL, steps=10, start_position=GLOBAL_BACK_GOAL)
++                queue_reset_actions(action_queue, robot, np.zeros(12), steps=30, start_position=GLOBAL_OPEN_GOAL)
++                action_queue.append({}) # reset to zero flag
++            teleop.vr_event_handler.events['back_position'] = False
++            events["back_position"] = False  # reset event state
++            
++        sent_action = robot.send_action(action)
++
++        if dataset is not None:
++            action_frame = build_dataset_frame(dataset.features, sent_action, prefix="action")
++            frame = {**observation_frame, **action_frame, "task": single_task}
++            dataset.add_frame(frame)
++
++        if display_data:
++            log_rerun_data(observation, action)
++
++        dt_s = time.perf_counter() - start_loop_t
++        precise_sleep(1 / fps - dt_s)
++
++        timestamp = time.perf_counter() - start_episode_t
++
++
++@parser.wrap()
++def record(cfg: RecordConfig) -> LeRobotDataset:
++    init_logging()
++    logging.info(pformat(asdict(cfg)))
++    if cfg.display_data:
++        init_rerun(session_name="recording")
++
++    robot = make_robot_from_config(cfg.robot)
++    teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
++
++    action_features = hw_to_dataset_features(robot.action_features, "action", cfg.dataset.video)
++    obs_features = hw_to_dataset_features(robot.observation_features, "observation", cfg.dataset.video)
++    dataset_features = {**action_features, **obs_features}
++
++    if cfg.resume:
++        dataset = LeRobotDataset(
++            cfg.dataset.repo_id,
++            root=cfg.dataset.root,
++            batch_encoding_size=cfg.dataset.video_encoding_batch_size,
++        )
++
++        if hasattr(robot, "cameras") and len(robot.cameras) > 0:
++            dataset.start_image_writer(
++                num_processes=cfg.dataset.num_image_writer_processes,
++                num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
++            )
++        sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
++    else:
++        # Create empty dataset or load existing saved episodes
++        sanity_check_dataset_name(cfg.dataset.repo_id, cfg.policy)
++        dataset = LeRobotDataset.create(
++            cfg.dataset.repo_id,
++            cfg.dataset.fps,
++            root=cfg.dataset.root,
++            robot_type=robot.name,
++            features=dataset_features,
++            use_videos=cfg.dataset.video,
++            image_writer_processes=cfg.dataset.num_image_writer_processes,
++            image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
++            batch_encoding_size=cfg.dataset.video_encoding_batch_size,
++        )
++
++    # Load pretrained policy
++    policy = None if cfg.policy is None else make_policy(cfg.policy, ds_meta=dataset.meta)
++
++    robot.connect()
++    if teleop is not None:
++        teleop.connect(robot=robot)
++        teleop.send_feedback()
++
++    # Select acording teleoperator
++    if isinstance(teleop, XLerobotVRTeleop):
++        # Use VR listener
++        listener, events = init_vr_listener(teleop)
++        logging.info("🎮 Using VR to control recording status")
++    else:
++        # Use keyboard listener
++        listener, events = init_keyboard_listener()
++        logging.info("⌨️ Using keyboard to control recording status")
++
++    with VideoEncodingManager(dataset):
++        recorded_episodes = 0
++        while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
++            log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
++            time.sleep(3)
++            record_loop(
++                robot=robot,
++                events=events,
++                fps=cfg.dataset.fps,
++                teleop=teleop,
++                policy=policy,
++                dataset=dataset,
++                control_time_s=cfg.dataset.episode_time_s,
++                single_task=cfg.dataset.single_task,
++                display_data=cfg.display_data,
++            )
++
++            # Execute a few seconds without recording to give time to manually reset the environment
++            # Skip reset for the last episode to be recorded
++            if not events["stop_recording"] and (
++                (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
++            ):
++                log_say("Reset environment", cfg.play_sounds)
++                record_loop(
++                    robot=robot,
++                    events=events,
++                    fps=cfg.dataset.fps,
++                    teleop=teleop,
++                    control_time_s=cfg.dataset.reset_time_s,
++                    single_task=cfg.dataset.single_task,
++                    display_data=cfg.display_data,
++                    dataset=None,
++                )
++
++            if events["rerecord_episode"]:
++                log_say("Delete Again record", cfg.play_sounds)
++                events["rerecord_episode"] = False
++                events["exit_early"] = False
++                teleop.vr_event_handler.events['rerecord_episode'] = False
++
++                dataset.clear_episode_buffer()
++                time.sleep(10)
++                continue
++
++            log_say("Saving Episode", cfg.play_sounds, blocking=True)
++
++            dataset.save_episode()
++            recorded_episodes += 1
++
++    log_say("Stop recording", cfg.play_sounds, blocking=True)
++
++    robot.disconnect()
++    if teleop is not None:
++        teleop.disconnect()
++
++    if not is_headless() and listener is not None:
++        listener.stop()
++
++    if cfg.dataset.push_to_hub:
++        dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
++
++    log_say("Exiting", cfg.play_sounds)
++    return dataset
++
++
++def main():
++    record()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/lerobot/robots/xlerobot/__init__.py b/src/lerobot/robots/xlerobot/__init__.py
+new file mode 100644
+index 00000000..f06d4aaa
+--- /dev/null
++++ b/src/lerobot/robots/xlerobot/__init__.py
+@@ -0,0 +1,4 @@
++from .config_xlerobot import XLerobotConfig
++from .xlerobot import XLerobot
++# from .xlerobot_client import XLerobotClient
++# from .xlerobot_host import XLerobotHost, XLerobotHostConfig
+\ No newline at end of file
+diff --git a/src/lerobot/robots/xlerobot/config_xlerobot.py b/src/lerobot/robots/xlerobot/config_xlerobot.py
+new file mode 100644
+index 00000000..1d311b2e
+--- /dev/null
++++ b/src/lerobot/robots/xlerobot/config_xlerobot.py
+@@ -0,0 +1,130 @@
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from dataclasses import dataclass, field
++
++from lerobot.cameras.configs import CameraConfig, Cv2Rotation, ColorMode
++from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
++from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
++
++from ..config import RobotConfig
++
++
++def xlerobot_cameras_config() -> dict[str, CameraConfig]:
++    return {
++        # "left_wrist": OpenCVCameraConfig(
++        #     index_or_path="/dev/video0", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
++        # ),
++
++        # "right_wrist": OpenCVCameraConfig(
++        #     index_or_path="/dev/video2", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
++        # ),  
++
++        # "head(RGDB)": OpenCVCameraConfig(
++        #     index_or_path="/dev/video2", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
++        # ),                     
++        
++        # "head": RealSenseCameraConfig(
++        #     serial_number_or_name="125322060037",  # Replace with camera SN
++        #     fps=30,
++        #     width=1280,
++        #     height=720,
++        #     color_mode=ColorMode.BGR, # Request BGR output
++        #     rotation=Cv2Rotation.NO_ROTATION,
++        #     use_depth=True
++        # ),
++    }
++
++
++@RobotConfig.register_subclass("xlerobot")
++@dataclass
++class XLerobotConfig(RobotConfig):
++    
++    port1: str = "/dev/ttyACM0"  # port to connect to the bus (left so101 arm only)
++    port2: str = "/dev/ttyACM1"  # port to connect to the bus (right so101 arm + lekiwi base)
++    disable_torque_on_disconnect: bool = True
++
++    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
++    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
++    # the number of motors in your follower arms.
++    max_relative_target: float | None = None
++
++    cameras: dict[str, CameraConfig] = field(default_factory=xlerobot_cameras_config)
++
++    # Set to `True` for backward compatibility with previous policies/dataset
++    use_degrees: bool = False
++
++    teleop_keys: dict[str, str] = field(
++        default_factory=lambda: {
++            # Movement
++            "forward": "i",
++            "backward": "k",
++            "left": "j",
++            "right": "l",
++            "rotate_left": "u",
++            "rotate_right": "o",
++            # Speed control
++            "speed_up": "n",
++            "speed_down": "m",
++            # quit teleop
++            "quit": "b",
++        }
++    )
++
++
++
++@dataclass
++class XLerobotHostConfig:
++    # Network Configuration
++    port_zmq_cmd: int = 5555
++    port_zmq_observations: int = 5556
++
++    # Duration of the application
++    connection_time_s: int = 3600
++
++    # Watchdog: stop the robot if no command is received for over 0.5 seconds.
++    watchdog_timeout_ms: int = 500
++
++    # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
++    max_loop_freq_hz: int = 30
++
++@RobotConfig.register_subclass("xlerobot_client")
++@dataclass
++class XLerobotClientConfig(RobotConfig):
++    # Network Configuration
++    remote_ip: str
++    port_zmq_cmd: int = 5555
++    port_zmq_observations: int = 5556
++
++    teleop_keys: dict[str, str] = field(
++        default_factory=lambda: {
++            # Movement
++            "forward": "i",
++            "backward": "k",
++            "left": "j",
++            "right": "l",
++            "rotate_left": "u",
++            "rotate_right": "o",
++            # Speed control
++            "speed_up": "n",
++            "speed_down": "m",
++            # quit teleop
++            "quit": "b",
++        }
++    )
++
++    cameras: dict[str, CameraConfig] = field(default_factory=xlerobot_cameras_config)
++
++    polling_timeout_ms: int = 15
++    connect_timeout_s: int = 5
+diff --git a/src/lerobot/robots/xlerobot/xlerobot.py b/src/lerobot/robots/xlerobot/xlerobot.py
+new file mode 100644
+index 00000000..5fd59dc1
+--- /dev/null
++++ b/src/lerobot/robots/xlerobot/xlerobot.py
+@@ -0,0 +1,621 @@
++#!/usr/bin/env python
++
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import logging
++import time
++from functools import cached_property
++from itertools import chain
++from typing import Any
++
++import numpy as np
++
++from lerobot.cameras.utils import make_cameras_from_configs
++from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
++from lerobot.motors import Motor, MotorCalibration, MotorNormMode
++from lerobot.motors.feetech import (
++    FeetechMotorsBus,
++    OperatingMode,
++)
++
++from ..robot import Robot
++from ..utils import ensure_safe_goal_position
++from .config_xlerobot import XLerobotConfig
++
++logger = logging.getLogger(__name__)
++
++
++class XLerobot(Robot):
++    """
++    The robot includes a three omniwheel mobile base and a remote follower arm.
++    The leader arm is connected locally (on the laptop) and its joint positions are recorded and then
++    forwarded to the remote follower arm (after applying a safety clamp).
++    In parallel, keyboard teleoperation is used to generate raw velocity commands for the wheels.
++    """
++
++    config_class = XLerobotConfig
++    name = "xlerobot"
++
++    def __init__(self, config: XLerobotConfig):
++        super().__init__(config)
++        self.config = config
++        self.teleop_keys = config.teleop_keys
++        # Define three speed levels and a current index
++        self.speed_levels = [
++            {"xy": 0.1, "theta": 30},  # slow
++            {"xy": 0.2, "theta": 60},  # medium
++            {"xy": 0.3, "theta": 90},  # fast
++        ]
++        self.speed_index = 0  # Start at slow
++        norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
++        if self.calibration.get("left_arm_shoulder_pan") is not None:
++            calibration1 = {
++                "left_arm_shoulder_pan": self.calibration.get("left_arm_shoulder_pan"),
++                "left_arm_shoulder_lift": self.calibration.get("left_arm_shoulder_lift"),
++                "left_arm_elbow_flex": self.calibration.get("left_arm_elbow_flex"), 
++                "left_arm_wrist_flex": self.calibration.get("left_arm_wrist_flex"),
++                "left_arm_wrist_roll": self.calibration.get("left_arm_wrist_roll"),
++                "left_arm_gripper": self.calibration.get("left_arm_gripper"),
++            }
++        else:
++            calibration1 = self.calibration
++        
++        self.bus1 = FeetechMotorsBus(
++            port=self.config.port1,
++            motors={
++                # left arm
++                "left_arm_shoulder_pan": Motor(1, "sts3215", norm_mode_body),
++                "left_arm_shoulder_lift": Motor(2, "sts3215", norm_mode_body),
++                "left_arm_elbow_flex": Motor(3, "sts3215", norm_mode_body),
++                "left_arm_wrist_flex": Motor(4, "sts3215", norm_mode_body),
++                "left_arm_wrist_roll": Motor(5, "sts3215", norm_mode_body),
++                "left_arm_gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
++            },
++            calibration= calibration1,
++        )
++        if self.calibration.get("right_arm_shoulder_pan") is not None:
++            calibration2 = {
++                "right_arm_shoulder_pan": self.calibration.get("right_arm_shoulder_pan"),
++                "right_arm_shoulder_lift": self.calibration.get("right_arm_shoulder_lift"),
++                "right_arm_elbow_flex": self.calibration.get("right_arm_elbow_flex"),
++                "right_arm_wrist_flex": self.calibration.get("right_arm_wrist_flex"),
++                "right_arm_wrist_roll": self.calibration.get("right_arm_wrist_roll"),
++                "right_arm_gripper": self.calibration.get("right_arm_gripper"),
++                "base_left_wheel": self.calibration.get("base_left_wheel"),
++                "base_back_wheel": self.calibration.get("base_back_wheel"),
++                "base_right_wheel": self.calibration.get("base_right_wheel"),
++            }
++        else:
++            calibration2 = self.calibration
++        self.bus2= FeetechMotorsBus(
++            port=self.config.port2,
++            motors={
++                # right arm
++                "right_arm_shoulder_pan": Motor(1, "sts3215", norm_mode_body),
++                "right_arm_shoulder_lift": Motor(2, "sts3215", norm_mode_body),
++                "right_arm_elbow_flex": Motor(3, "sts3215", norm_mode_body),
++                "right_arm_wrist_flex": Motor(4, "sts3215", norm_mode_body),
++                "right_arm_wrist_roll": Motor(5, "sts3215", norm_mode_body),
++                "right_arm_gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
++                # base
++                "base_left_wheel": Motor(7, "sts3215", MotorNormMode.RANGE_M100_100),
++                "base_back_wheel": Motor(8, "sts3215", MotorNormMode.RANGE_M100_100),
++                "base_right_wheel": Motor(9, "sts3215", MotorNormMode.RANGE_M100_100),
++            },
++            calibration=calibration2,
++        )
++        self.left_arm_motors = [motor for motor in self.bus1.motors if motor.startswith("left_arm")]
++        self.right_arm_motors = [motor for motor in self.bus2.motors if motor.startswith("right_arm")]
++        self.base_motors = [motor for motor in self.bus2.motors if motor.startswith("base")]
++        self.cameras = make_cameras_from_configs(config.cameras)
++
++    @property
++    def _state_ft(self) -> dict[str, type]:
++        return dict.fromkeys(
++            (
++                "left_arm_shoulder_pan.pos",
++                "left_arm_shoulder_lift.pos",
++                "left_arm_elbow_flex.pos",
++                "left_arm_wrist_flex.pos",
++                "left_arm_wrist_roll.pos",
++                "left_arm_gripper.pos",
++                "right_arm_shoulder_pan.pos",
++                "right_arm_shoulder_lift.pos",
++                "right_arm_elbow_flex.pos",
++                "right_arm_wrist_flex.pos",
++                "right_arm_wrist_roll.pos",
++                "right_arm_gripper.pos",
++                "x.vel",
++                "y.vel",
++                "theta.vel",
++            ),
++            float,
++        )
++
++    @property
++    def _cameras_ft(self) -> dict[str, tuple]:
++        return {
++            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
++        }
++
++    @cached_property
++    def observation_features(self) -> dict[str, type | tuple]:
++        return {**self._state_ft, **self._cameras_ft}
++
++    @cached_property
++    def action_features(self) -> dict[str, type]:
++        return self._state_ft
++
++    @property
++    def is_connected(self) -> bool:
++        return self.bus1.is_connected and self.bus2.is_connected and all(
++            cam.is_connected for cam in self.cameras.values()
++        )
++
++    def connect(self, calibrate: bool = True) -> None:
++        if self.is_connected:
++            raise DeviceAlreadyConnectedError(f"{self} already connected")
++
++        self.bus1.connect()
++        self.bus2.connect()
++        
++        # Check if calibration file exists and ask user if they want to restore it
++        if self.calibration_fpath.is_file():
++            logger.info(f"Calibration file found at {self.calibration_fpath}")
++            user_input = input(
++                f"Press ENTER to restore calibration from file, or type 'c' and press ENTER to run manual calibration: "
++            )
++            if user_input.strip().lower() != "c":
++                logger.info("Attempting to restore calibration from file...")
++                try:
++                    # Load calibration data into bus memory
++                    self.bus1.calibration = {k: v for k, v in self.calibration.items() if k in self.bus1.motors}
++                    self.bus2.calibration = {k: v for k, v in self.calibration.items() if k in self.bus2.motors}
++                    logger.info("Calibration data loaded into bus memory successfully!")
++                    
++                    # Write calibration data to motors
++                    self.bus1.write_calibration({k: v for k, v in self.calibration.items() if k in self.bus1.motors})
++                    self.bus2.write_calibration({k: v for k, v in self.calibration.items() if k in self.bus2.motors})
++                    logger.info("Calibration restored successfully from file!")
++                    
++                except Exception as e:
++                    logger.warning(f"Failed to restore calibration from file: {e}")
++                    if calibrate:
++                        logger.info("Proceeding with manual calibration...")
++                        self.calibrate()
++            else:
++                logger.info("User chose manual calibration...")
++                if calibrate:
++                    self.calibrate()
++        elif calibrate:
++            logger.info("No calibration file found, proceeding with manual calibration...")
++            self.calibrate()
++
++        for cam in self.cameras.values():
++            cam.connect()
++
++        self.configure()
++        logger.info(f"{self} connected.")
++
++    @property
++    def is_calibrated(self) -> bool:
++        return self.bus1.is_calibrated and self.bus2.is_calibrated
++
++    def calibrate(self) -> None:
++        logger.info(f"\nRunning calibration of {self}")
++        ## calib left motors
++        left_motors = self.left_arm_motors
++        self.bus1.disable_torque()
++        for name in left_motors:
++            self.bus1.write("Operating_Mode", name, OperatingMode.POSITION.value)
++        input(
++            "Move left arm motors to the middle of their range of motion and press ENTER...."
++        )
++        homing_offsets = self.bus1.set_half_turn_homings(left_motors)
++        homing_offsets.update(dict.fromkeys(self.right_arm_motors + self.base_motors, 0))
++        
++        print(
++            f"Move all left arm joints sequentially through their "
++            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
++        )
++        range_mins, range_maxes = self.bus1.record_ranges_of_motion(left_motors)
++        
++        calibration_left = {}
++        for name, motor in self.bus1.motors.items():
++            calibration_left[name] = MotorCalibration(
++                id=motor.id,
++                drive_mode=0,
++                homing_offset=homing_offsets[name],
++                range_min=range_mins[name],
++                range_max=range_maxes[name],
++            )
++        
++        self.bus1.write_calibration(calibration_left)
++        
++        # calib right motors
++        right_motors = self.right_arm_motors + self.base_motors
++        self.bus2.disable_torque(self.right_arm_motors)
++        for name in self.right_arm_motors:
++            self.bus2.write("Operating_Mode", name, OperatingMode.POSITION.value)
++        
++        input(
++            "Move right arm motors to the middle of their range of motion and press ENTER...."
++        )
++        
++        homing_offsets = self.bus2.set_half_turn_homings(self.right_arm_motors)
++        homing_offsets.update(dict.fromkeys(self.base_motors, 0))
++        
++        full_turn_motor = [
++            motor for motor in right_motors if any(keyword in motor for keyword in ["wheel"])
++        ]
++        
++        unknown_range_motors = [motor for motor in right_motors if motor not in full_turn_motor]
++        print(
++            f"Move all right arm joints except '{full_turn_motor}' sequentially through their "
++            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
++        )
++        range_mins, range_maxes = self.bus2.record_ranges_of_motion(unknown_range_motors)
++        for name in full_turn_motor:
++            range_mins[name] = 0
++            range_maxes[name] = 4095
++        
++        calibration_right = {}
++        
++        for name, motor in self.bus2.motors.items():
++            calibration_right[name] = MotorCalibration(
++                id=motor.id,
++                drive_mode=0,
++                homing_offset=homing_offsets[name],
++                range_min=range_mins[name],
++                range_max=range_maxes[name],
++            )
++        
++        self.bus2.write_calibration(calibration_right)
++        self.calibration = {**calibration_left, **calibration_right}
++        self._save_calibration()
++        print("Calibration saved to", self.calibration_fpath)
++        
++
++    def configure(self):
++        # Set-up arm actuators (position mode)
++        # We assume that at connection time, arm is in a rest position,
++        # and torque can be safely disabled to run calibration
++        
++        # bus 1
++        self.bus1.disable_torque()
++        self.bus1.configure_motors()
++
++        # bus 2
++        self.bus2.disable_torque()
++        self.bus2.configure_motors()
++        
++        
++        for name in self.left_arm_motors:
++            self.bus1.write("Operating_Mode", name, OperatingMode.POSITION.value)
++            # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
++            self.bus1.write("P_Coefficient", name, 16)
++            # Set I_Coefficient and D_Coefficient to default value 0 and 32
++            self.bus1.write("I_Coefficient", name, 0)
++            self.bus1.write("D_Coefficient", name, 43)
++        
++        for name in self.right_arm_motors:
++            self.bus2.write("Operating_Mode", name, OperatingMode.POSITION.value)
++            # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
++            self.bus2.write("P_Coefficient", name, 16)
++            # Set I_Coefficient and D_Coefficient to default value 0 and 32
++            self.bus2.write("I_Coefficient", name, 0)
++            self.bus2.write("D_Coefficient", name, 43)
++        
++        for name in self.base_motors:
++            self.bus2.write("Operating_Mode", name, OperatingMode.VELOCITY.value)
++        
++        
++        self.bus1.enable_torque()
++        self.bus2.enable_torque()
++        
++
++    def setup_motors(self) -> None:
++        for motor in reversed(self.left_arm_motors):
++            input(f"Connect the controller board to the '{motor}' motor only and press enter.")
++            self.bus1.setup_motor(motor)
++            print(f"'{motor}' motor id set to {self.bus1.motors[motor].id}")
++        
++        # Set up right arm motors
++        for motor in chain(reversed(self.right_arm_motors), reversed(self.base_motors)):
++            input(f"Connect the controller board to the '{motor}' motor only and press enter.")
++            self.bus2.setup_motor(motor)
++            print(f"'{motor}' motor id set to {self.bus2.motors[motor].id}")
++        
++
++    @staticmethod
++    def _degps_to_raw(degps: float) -> int:
++        steps_per_deg = 4096.0 / 360.0
++        speed_in_steps = degps * steps_per_deg
++        speed_int = int(round(speed_in_steps))
++        # Cap the value to fit within signed 16-bit range (-32768 to 32767)
++        if speed_int > 0x7FFF:
++            speed_int = 0x7FFF  # 32767 -> maximum positive value
++        elif speed_int < -0x8000:
++            speed_int = -0x8000  # -32768 -> minimum negative value
++        return speed_int
++
++    @staticmethod
++    def _raw_to_degps(raw_speed: int) -> float:
++        steps_per_deg = 4096.0 / 360.0
++        magnitude = raw_speed
++        degps = magnitude / steps_per_deg
++        return degps
++
++    def _body_to_wheel_raw(
++        self,
++        x: float,
++        y: float,
++        theta: float,
++        wheel_radius: float = 0.05,
++        base_radius: float = 0.125,
++        max_raw: int = 3000,
++    ) -> dict:
++        """
++        Convert desired body-frame velocities into wheel raw commands.
++
++        Parameters:
++          x_cmd      : Linear velocity in x (m/s).
++          y_cmd      : Linear velocity in y (m/s).
++          theta_cmd  : Rotational velocity (deg/s).
++          wheel_radius: Radius of each wheel (meters).
++          base_radius : Distance from the center of rotation to each wheel (meters).
++          max_raw    : Maximum allowed raw command (ticks) per wheel.
++
++        Returns:
++          A dictionary with wheel raw commands:
++             {"base_left_wheel": value, "base_back_wheel": value, "base_right_wheel": value}.
++
++        Notes:
++          - Internally, the method converts theta_cmd to rad/s for the kinematics.
++          - The raw command is computed from the wheels angular speed in deg/s
++            using _degps_to_raw(). If any command exceeds max_raw, all commands
++            are scaled down proportionally.
++        """
++        # Convert rotational velocity from deg/s to rad/s.
++        theta_rad = theta * (np.pi / 180.0)
++        # Create the body velocity vector [x, y, theta_rad].
++        velocity_vector = np.array([x, y, theta_rad])
++
++        # Define the wheel mounting angles with a -90° offset.
++        angles = np.radians(np.array([240, 0, 120]) - 90)
++        # Build the kinematic matrix: each row maps body velocities to a wheel’s linear speed.
++        # The third column (base_radius) accounts for the effect of rotation.
++        m = np.array([[np.cos(a), np.sin(a), base_radius] for a in angles])
++
++        # Compute each wheel’s linear speed (m/s) and then its angular speed (rad/s).
++        wheel_linear_speeds = m.dot(velocity_vector)
++        wheel_angular_speeds = wheel_linear_speeds / wheel_radius
++
++        # Convert wheel angular speeds from rad/s to deg/s.
++        wheel_degps = wheel_angular_speeds * (180.0 / np.pi)
++
++        # Scaling
++        steps_per_deg = 4096.0 / 360.0
++        raw_floats = [abs(degps) * steps_per_deg for degps in wheel_degps]
++        max_raw_computed = max(raw_floats)
++        if max_raw_computed > max_raw:
++            scale = max_raw / max_raw_computed
++            wheel_degps = wheel_degps * scale
++
++        # Convert each wheel’s angular speed (deg/s) to a raw integer.
++        wheel_raw = [self._degps_to_raw(deg) for deg in wheel_degps]
++
++        return {
++            "base_left_wheel": wheel_raw[0],
++            "base_back_wheel": wheel_raw[1],
++            "base_right_wheel": wheel_raw[2],
++        }
++
++    def _wheel_raw_to_body(
++        self,
++        left_wheel_speed,
++        back_wheel_speed,
++        right_wheel_speed,
++        wheel_radius: float = 0.05,
++        base_radius: float = 0.125,
++    ) -> dict[str, Any]:
++        """
++        Convert wheel raw command feedback back into body-frame velocities.
++
++        Parameters:
++          wheel_raw   : Vector with raw wheel commands ("base_left_wheel", "base_back_wheel", "base_right_wheel").
++          wheel_radius: Radius of each wheel (meters).
++          base_radius : Distance from the robot center to each wheel (meters).
++
++        Returns:
++          A dict (x.vel, y.vel, theta.vel) all in m/s
++        """
++
++        # Convert each raw command back to an angular speed in deg/s.
++        wheel_degps = np.array(
++            [
++                self._raw_to_degps(left_wheel_speed),
++                self._raw_to_degps(back_wheel_speed),
++                self._raw_to_degps(right_wheel_speed),
++            ]
++        )
++
++        # Convert from deg/s to rad/s.
++        wheel_radps = wheel_degps * (np.pi / 180.0)
++        # Compute each wheel’s linear speed (m/s) from its angular speed.
++        wheel_linear_speeds = wheel_radps * wheel_radius
++
++        # Define the wheel mounting angles with a -90° offset.
++        angles = np.radians(np.array([240, 0, 120]) - 90)
++        m = np.array([[np.cos(a), np.sin(a), base_radius] for a in angles])
++
++        # Solve the inverse kinematics: body_velocity = M⁻¹ · wheel_linear_speeds.
++        m_inv = np.linalg.inv(m)
++        velocity_vector = m_inv.dot(wheel_linear_speeds)
++        x, y, theta_rad = velocity_vector
++        theta = theta_rad * (180.0 / np.pi)
++        return {
++            "x.vel": x,
++            "y.vel": y,
++            "theta.vel": theta,
++        }  # m/s and deg/s
++    
++    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
++        # Speed control
++        if self.teleop_keys["speed_up"] in pressed_keys:
++            self.speed_index = min(self.speed_index + 1, 2)
++        if self.teleop_keys["speed_down"] in pressed_keys:
++            self.speed_index = max(self.speed_index - 1, 0)
++        speed_setting = self.speed_levels[self.speed_index]
++        xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
++        theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
++
++        x_cmd = 0.0  # m/s forward/backward
++        y_cmd = 0.0  # m/s lateral
++        theta_cmd = 0.0  # deg/s rotation
++
++        if self.teleop_keys["forward"] in pressed_keys:
++            x_cmd += xy_speed
++        if self.teleop_keys["backward"] in pressed_keys:
++            x_cmd -= xy_speed
++        if self.teleop_keys["left"] in pressed_keys:
++            y_cmd += xy_speed
++        if self.teleop_keys["right"] in pressed_keys:
++            y_cmd -= xy_speed
++        if self.teleop_keys["rotate_left"] in pressed_keys:
++            theta_cmd += theta_speed
++        if self.teleop_keys["rotate_right"] in pressed_keys:
++            theta_cmd -= theta_speed
++            
++        return {
++            "x.vel": x_cmd, 
++            "y.vel": y_cmd,
++            "theta.vel": theta_cmd,
++        }
++
++    def get_observation(self, use_camera=True) -> dict[str, Any]:
++        if not self.is_connected:
++            raise DeviceNotConnectedError(f"{self} is not connected.")
++
++        # Read actuators position for arm and vel for base
++        start = time.perf_counter()
++        left_arm_pos = self.bus1.sync_read("Present_Position", self.left_arm_motors)
++        right_arm_pos = self.bus2.sync_read("Present_Position", self.right_arm_motors)
++        base_wheel_vel = self.bus2.sync_read("Present_Velocity", self.base_motors)
++        
++        base_vel = self._wheel_raw_to_body(
++            base_wheel_vel["base_left_wheel"],
++            base_wheel_vel["base_back_wheel"],
++            base_wheel_vel["base_right_wheel"],
++        )
++        
++        left_arm_state = {f"{k}.pos": v for k, v in left_arm_pos.items()}
++        right_arm_state = {f"{k}.pos": v for k, v in right_arm_pos.items()}
++        dt_ms = (time.perf_counter() - start) * 1e3
++        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
++
++        # Capture images from cameras
++        camera_obs = self.get_camera_observation()
++
++        # Combine all observations
++        obs_dict = {**left_arm_state, **right_arm_state, **base_vel, **camera_obs}
++
++        return obs_dict
++    
++    def get_camera_observation(self):
++        obs_dict = {}
++        for cam_key, cam in self.cameras.items():
++            start = time.perf_counter()
++            obs_dict[cam_key] = cam.async_read()
++            dt_ms = (time.perf_counter() - start) * 1e3
++            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
++        
++        return obs_dict
++
++    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
++        """Command lekiwi to move to a target joint configuration.
++
++        The relative action magnitude may be clipped depending on the configuration parameter
++        `max_relative_target`. In this case, the action sent differs from original action.
++        Thus, this function always returns the action actually sent.
++
++        Raises:
++            RobotDeviceNotConnectedError: if robot is not connected.
++
++        Returns:
++            np.ndarray: the action sent to the motors, potentially clipped.
++        """
++        if not self.is_connected:
++            raise DeviceNotConnectedError(f"{self} is not connected.")
++        
++        left_arm_pos = {k: v for k, v in action.items() if k.startswith("left_arm_") and k.endswith(".pos")}
++        right_arm_pos = {k: v for k, v in action.items() if k.startswith("right_arm_") and k.endswith(".pos")}
++        base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
++        base_wheel_goal_vel = self._body_to_wheel_raw(
++            base_goal_vel.get("x.vel", 0.0),
++            base_goal_vel.get("y.vel", 0.0),
++            base_goal_vel.get("theta.vel", 0.0),
++        )
++        
++        
++        if self.config.max_relative_target is not None:
++            # Read present positions for left arm and right arm
++            present_pos_left = self.bus1.sync_read("Present_Position", self.left_arm_motors)
++            present_pos_right = self.bus2.sync_read("Present_Position", self.right_arm_motors)
++
++            # Combine all present positions
++            present_pos = {**present_pos_left, **present_pos_right}
++
++            # Ensure safe goal position for each arm
++            goal_present_pos = {
++                key: (g_pos, present_pos[key.removesuffix(".pos")]) for key, g_pos in chain(left_arm_pos.items(), right_arm_pos.items())
++            }
++            safe_goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
++
++            # Update the action with the safe goal positions
++            left_arm_pos = {k: v for k, v in safe_goal_pos.items() if k in left_arm_pos}
++            right_arm_pos = {k: v for k, v in safe_goal_pos.items() if k in right_arm_pos}
++        
++        left_arm_pos_raw = {k.replace(".pos", ""): v for k, v in left_arm_pos.items()}
++        right_arm_pos_raw = {k.replace(".pos", ""): v for k, v in right_arm_pos.items()}
++        
++        # Only sync_write if there are motors to write to
++        if left_arm_pos_raw:
++            self.bus1.sync_write("Goal_Position", left_arm_pos_raw)
++        if right_arm_pos_raw:
++            self.bus2.sync_write("Goal_Position", right_arm_pos_raw)
++        if base_wheel_goal_vel:
++            self.bus2.sync_write("Goal_Velocity", base_wheel_goal_vel)
++        return {
++            **left_arm_pos,
++            **right_arm_pos,
++            **base_goal_vel,
++        }
++
++    def stop_base(self):
++        self.bus2.sync_write("Goal_Velocity", dict.fromkeys(self.base_motors, 0), num_retry=5)
++        logger.info("Base motors stopped")
++
++    def disconnect(self):
++        if not self.is_connected:
++            raise DeviceNotConnectedError(f"{self} is not connected.")
++
++        self.stop_base()
++        self.bus1.disconnect(self.config.disable_torque_on_disconnect)
++        self.bus2.disconnect(self.config.disable_torque_on_disconnect)
++        for cam in self.cameras.values():
++            cam.disconnect()
++
++        logger.info(f"{self} disconnected.")
+diff --git a/src/lerobot/robots/xlerobot/xlerobot_client.py b/src/lerobot/robots/xlerobot/xlerobot_client.py
+new file mode 100644
+index 00000000..e04676dc
+--- /dev/null
++++ b/src/lerobot/robots/xlerobot/xlerobot_client.py
+@@ -0,0 +1,348 @@
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# TODO(aliberts, Steven, Pepijn): use gRPC calls instead of zmq?
++
++import base64
++import json
++import logging
++from functools import cached_property
++from typing import Any, Dict, Optional, Tuple
++
++import cv2
++import numpy as np
++import zmq
++
++from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
++
++from ..robot import Robot
++from .config_xlerobot import XLerobotConfig, XLerobotClientConfig
++
++
++class XLerobotClient(Robot):
++    config_class = XLerobotClientConfig
++    name = "xlerobot_client"
++
++    def __init__(self, config: XLerobotClientConfig):
++        super().__init__(config)
++        self.config = config
++        self.id = config.id
++        self.robot_type = config.type
++
++        self.remote_ip = config.remote_ip
++        self.port_zmq_cmd = config.port_zmq_cmd
++        self.port_zmq_observations = config.port_zmq_observations
++
++        self.teleop_keys = config.teleop_keys
++
++        self.polling_timeout_ms = config.polling_timeout_ms
++        self.connect_timeout_s = config.connect_timeout_s
++
++        self.zmq_context = None
++        self.zmq_cmd_socket = None
++        self.zmq_observation_socket = None
++
++        self.last_frames = {}
++
++        self.last_remote_state = {}
++
++        # Define three speed levels and a current index
++        self.speed_levels = [
++            {"xy": 0.1, "theta": 30},  # slow
++            {"xy": 0.2, "theta": 60},  # medium
++            {"xy": 0.3, "theta": 90},  # fast
++        ]
++        self.speed_index = 0  # Start at slow
++
++        self._is_connected = False
++        self.logs = {}
++
++    @cached_property
++    def _state_ft(self) -> dict[str, type]:
++        return dict.fromkeys(
++            (
++                "left_arm_shoulder_pan.pos",
++                "left_arm_shoulder_lift.pos",
++                "left_arm_elbow_flex.pos",
++                "left_arm_wrist_flex.pos",
++                "left_arm_wrist_roll.pos",
++                "left_arm_gripper.pos",
++                "right_arm_shoulder_pan.pos",
++                "right_arm_shoulder_lift.pos",
++                "right_arm_elbow_flex.pos",
++                "right_arm_wrist_flex.pos",
++                "right_arm_wrist_roll.pos",
++                "right_arm_gripper.pos",
++                "x.vel",
++                "y.vel",
++                "theta.vel",
++            ),
++            float,
++        )
++        
++    @cached_property
++    def _state_order(self) -> tuple[str, ...]:
++        return tuple(self._state_ft.keys())
++
++    @cached_property
++    def _cameras_ft(self) -> dict[str, tuple[int, int, int]]:
++        return {name: (cfg.height, cfg.width, 3) for name, cfg in self.config.cameras.items()}
++
++    @cached_property
++    def observation_features(self) -> dict[str, type | tuple]:
++        return {**self._state_ft, **self._cameras_ft}
++
++    @cached_property
++    def action_features(self) -> dict[str, type]:
++        return self._state_ft
++
++    @property
++    def is_connected(self) -> bool:
++        return self._is_connected
++
++    @property
++    def is_calibrated(self) -> bool:
++        pass
++
++    def connect(self) -> None:
++        """Establishes ZMQ sockets with the remote mobile robot"""
++
++        if self._is_connected:
++            raise DeviceAlreadyConnectedError(
++                "LeKiwi Daemon is already connected. Do not run `robot.connect()` twice."
++            )
++
++        self.zmq_context = zmq.Context()
++        self.zmq_cmd_socket = self.zmq_context.socket(zmq.PUSH)
++        zmq_cmd_locator = f"tcp://{self.remote_ip}:{self.port_zmq_cmd}"
++        self.zmq_cmd_socket.connect(zmq_cmd_locator)
++        self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
++
++        self.zmq_observation_socket = self.zmq_context.socket(zmq.PULL)
++        zmq_observations_locator = f"tcp://{self.remote_ip}:{self.port_zmq_observations}"
++        self.zmq_observation_socket.connect(zmq_observations_locator)
++        self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
++
++        poller = zmq.Poller()
++        poller.register(self.zmq_observation_socket, zmq.POLLIN)
++        socks = dict(poller.poll(self.connect_timeout_s * 1000))
++        if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
++            raise DeviceNotConnectedError("Timeout waiting for LeKiwi Host to connect expired.")
++
++        self._is_connected = True
++
++    def calibrate(self) -> None:
++        pass
++
++    def _poll_and_get_latest_message(self) -> Optional[str]:
++        """Polls the ZMQ socket for a limited time and returns the latest message string."""
++        poller = zmq.Poller()
++        poller.register(self.zmq_observation_socket, zmq.POLLIN)
++
++        try:
++            socks = dict(poller.poll(self.polling_timeout_ms))
++        except zmq.ZMQError as e:
++            logging.error(f"ZMQ polling error: {e}")
++            return None
++
++        if self.zmq_observation_socket not in socks:
++            logging.info("No new data available within timeout.")
++            return None
++
++        last_msg = None
++        while True:
++            try:
++                msg = self.zmq_observation_socket.recv_string(zmq.NOBLOCK)
++                last_msg = msg
++            except zmq.Again:
++                break
++
++        if last_msg is None:
++            logging.warning("Poller indicated data, but failed to retrieve message.")
++
++        return last_msg
++
++    def _parse_observation_json(self, obs_string: str) -> Optional[Dict[str, Any]]:
++        """Parses the JSON observation string."""
++        try:
++            return json.loads(obs_string)
++        except json.JSONDecodeError as e:
++            logging.error(f"Error decoding JSON observation: {e}")
++            return None
++
++    def _decode_image_from_b64(self, image_b64: str) -> Optional[np.ndarray]:
++        """Decodes a base64 encoded image string to an OpenCV image."""
++        if not image_b64:
++            return None
++        try:
++            jpg_data = base64.b64decode(image_b64)
++            np_arr = np.frombuffer(jpg_data, dtype=np.uint8)
++            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
++            if frame is None:
++                logging.warning("cv2.imdecode returned None for an image.")
++            return frame
++        except (TypeError, ValueError) as e:
++            logging.error(f"Error decoding base64 image data: {e}")
++            return None
++
++    def _remote_state_from_obs(
++        self, observation: Dict[str, Any]
++    ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
++        """Extracts frames, and state from the parsed observation."""
++
++        flat_state = {key: observation.get(key, 0.0) for key in self._state_order}
++
++        state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
++
++        obs_dict: Dict[str, Any] = {**flat_state, "observation.state": state_vec}
++
++        # Decode images
++        current_frames: Dict[str, np.ndarray] = {}
++        for cam_name, image_b64 in observation.items():
++            if cam_name not in self._cameras_ft:
++                continue
++            frame = self._decode_image_from_b64(image_b64)
++            if frame is not None:
++                current_frames[cam_name] = frame
++
++        return current_frames, obs_dict
++
++    def _get_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], Dict[str, Any]]:
++        """
++        Polls the video socket for the latest observation data.
++
++        Attempts to retrieve and decode the latest message within a short timeout.
++        If successful, updates and returns the new frames, speed, and arm state.
++        If no new data arrives or decoding fails, returns the last known values.
++        """
++
++        # 1. Get the latest message string from the socket
++        latest_message_str = self._poll_and_get_latest_message()
++
++        # 2. If no message, return cached data
++        if latest_message_str is None:
++            return self.last_frames, self.last_remote_state
++
++        # 3. Parse the JSON message
++        observation = self._parse_observation_json(latest_message_str)
++
++        # 4. If JSON parsing failed, return cached data
++        if observation is None:
++            return self.last_frames, self.last_remote_state
++
++        # 5. Process the valid observation data
++        try:
++            new_frames, new_state = self._remote_state_from_obs(observation)
++        except Exception as e:
++            logging.error(f"Error processing observation data, serving last observation: {e}")
++            return self.last_frames, self.last_remote_state
++
++        self.last_frames = new_frames
++        self.last_remote_state = new_state
++
++        return new_frames, new_state
++
++    def get_observation(self) -> dict[str, Any]:
++        """
++        Capture observations from the remote robot: current follower arm positions,
++        present wheel speeds (converted to body-frame velocities: x, y, theta),
++        and a camera frame. Receives over ZMQ, translate to body-frame vel
++        """
++        if not self._is_connected:
++            raise DeviceNotConnectedError("LeKiwiClient is not connected. You need to run `robot.connect()`.")
++
++        frames, obs_dict = self._get_data()
++
++        # Loop over each configured camera
++        for cam_name, frame in frames.items():
++            if frame is None:
++                logging.warning("Frame is None")
++                frame = np.zeros((640, 480, 3), dtype=np.uint8)
++            obs_dict[cam_name] = frame
++
++        return obs_dict
++
++    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
++        # Speed control
++        if self.teleop_keys["speed_up"] in pressed_keys:
++            self.speed_index = min(self.speed_index + 1, 2)
++        if self.teleop_keys["speed_down"] in pressed_keys:
++            self.speed_index = max(self.speed_index - 1, 0)
++        speed_setting = self.speed_levels[self.speed_index]
++        xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
++        theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
++
++        x_cmd = 0.0  # m/s forward/backward
++        y_cmd = 0.0  # m/s lateral
++        theta_cmd = 0.0  # deg/s rotation
++
++        if self.teleop_keys["forward"] in pressed_keys:
++            x_cmd += xy_speed
++        if self.teleop_keys["backward"] in pressed_keys:
++            x_cmd -= xy_speed
++        if self.teleop_keys["left"] in pressed_keys:
++            y_cmd += xy_speed
++        if self.teleop_keys["right"] in pressed_keys:
++            y_cmd -= xy_speed
++        if self.teleop_keys["rotate_left"] in pressed_keys:
++            theta_cmd += theta_speed
++        if self.teleop_keys["rotate_right"] in pressed_keys:
++            theta_cmd -= theta_speed
++            
++        return {
++            "x.vel": x_cmd, 
++            "y.vel": y_cmd,
++            "theta.vel": theta_cmd,
++        }
++
++    def configure(self):
++        pass
++
++    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
++        """Command lekiwi to move to a target joint configuration. Translates to motor space + sends over ZMQ
++
++        Args:
++            action (np.ndarray): array containing the goal positions for the motors.
++
++        Raises:
++            RobotDeviceNotConnectedError: if robot is not connected.
++
++        Returns:
++            np.ndarray: the action sent to the motors, potentially clipped.
++        """
++        if not self._is_connected:
++            raise DeviceNotConnectedError(
++                "ManipulatorRobot is not connected. You need to run `robot.connect()`."
++            )
++
++        self.zmq_cmd_socket.send_string(json.dumps(action))  # action is in motor space
++
++        # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
++        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
++
++        action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
++        action_sent["action"] = actions
++        return action_sent
++
++    def disconnect(self):
++        """Cleans ZMQ comms"""
++
++        if not self._is_connected:
++            raise DeviceNotConnectedError(
++                "LeKiwi is not connected. You need to run `robot.connect()` before disconnecting."
++            )
++        self.zmq_observation_socket.close()
++        self.zmq_cmd_socket.close()
++        self.zmq_context.term()
++        self._is_connected = False
+diff --git a/src/lerobot/robots/xlerobot/xlerobot_host.py b/src/lerobot/robots/xlerobot/xlerobot_host.py
+new file mode 100644
+index 00000000..a9c968e9
+--- /dev/null
++++ b/src/lerobot/robots/xlerobot/xlerobot_host.py
+@@ -0,0 +1,127 @@
++#!/usr/bin/env python
++
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import base64
++import json
++import logging
++import time
++
++import cv2
++import zmq
++
++from .xlerobot import XLerobot
++from .config_xlerobot import XLerobotConfig, XLerobotHostConfig
++
++
++class XLerobotHost:
++    def __init__(self, config: XLerobotHostConfig):
++        self.zmq_context = zmq.Context()
++        self.zmq_cmd_socket = self.zmq_context.socket(zmq.PULL)
++        self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
++        self.zmq_cmd_socket.bind(f"tcp://*:{config.port_zmq_cmd}")
++
++        self.zmq_observation_socket = self.zmq_context.socket(zmq.PUSH)
++        self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
++        self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
++
++        self.connection_time_s = config.connection_time_s
++        self.watchdog_timeout_ms = config.watchdog_timeout_ms
++        self.max_loop_freq_hz = config.max_loop_freq_hz
++
++    def disconnect(self):
++        self.zmq_observation_socket.close()
++        self.zmq_cmd_socket.close()
++        self.zmq_context.term()
++
++
++def main():
++    logging.info("Configuring Xlerobot")
++    robot_config = XLerobotConfig(id="my_xlerobot_pc")
++    robot = XLerobot(robot_config)
++
++    logging.info("Connecting Xlerobot")
++    robot.connect()
++
++    logging.info("Starting HostAgent")
++    host_config = XLerobotHostConfig()
++    host = XLerobotHost(host_config)
++
++    last_cmd_time = time.time()
++    watchdog_active = False
++    logging.info("Waiting for commands...")
++    try:
++        # Business logic
++        start = time.perf_counter()
++        duration = 0
++        while duration < host.connection_time_s:
++            loop_start_time = time.time()
++            try:
++                msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
++                data = dict(json.loads(msg))
++                _action_sent = robot.send_action(data)
++                last_cmd_time = time.time()
++                watchdog_active = False
++            except zmq.Again:
++                if not watchdog_active:
++                    logging.warning("No command available")
++            except Exception as e:
++                logging.error("Message fetching failed: %s", e)
++
++            now = time.time()
++            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
++                logging.warning(
++                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. Stopping the base."
++                )
++                watchdog_active = True
++                robot.stop_base()
++
++            last_observation = robot.get_observation()
++
++            # Encode ndarrays to base64 strings
++            for cam_key, _ in robot.cameras.items():
++                ret, buffer = cv2.imencode(
++                    ".jpg", last_observation[cam_key], [int(cv2.IMWRITE_JPEG_QUALITY), 90]
++                )
++                if ret:
++                    last_observation[cam_key] = base64.b64encode(buffer).decode("utf-8")
++                else:
++                    last_observation[cam_key] = ""
++
++            # Send the observation to the remote agent
++            try:
++                host.zmq_observation_socket.send_string(json.dumps(last_observation), flags=zmq.NOBLOCK)
++            except zmq.Again:
++                logging.info("Dropping observation, no client connected")
++
++            # Ensure a short sleep to avoid overloading the CPU.
++            elapsed = time.time() - loop_start_time
++
++            time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
++            duration = time.perf_counter() - start
++        print("Cycle time reached.")
++
++    except KeyboardInterrupt:
++        print("Keyboard interrupt received. Exiting...")
++    finally:
++        print("Shutting down Lekiwi Host.")
++        robot.disconnect()
++        host.disconnect()
++
++    logging.info("Finished LeKiwi cleanly")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/lerobot/teleoperators/xlerobot_vr/__init__.py b/src/lerobot/teleoperators/xlerobot_vr/__init__.py
+new file mode 100644
+index 00000000..25b27578
+--- /dev/null
++++ b/src/lerobot/teleoperators/xlerobot_vr/__init__.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/env python
++
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from .configuration_xlerobot_vr import XLerobotVRTeleopConfig
++from .xlerobot_vr import XLerobotVRTeleop
++
++__all__ = ["XLerobotVRTeleopConfig", "XLerobotVRTeleop"]
+\ No newline at end of file
+diff --git a/src/lerobot/teleoperators/xlerobot_vr/configuration_xlerobot_vr.py b/src/lerobot/teleoperators/xlerobot_vr/configuration_xlerobot_vr.py
+new file mode 100644
+index 00000000..6e0f5a28
+--- /dev/null
++++ b/src/lerobot/teleoperators/xlerobot_vr/configuration_xlerobot_vr.py
+@@ -0,0 +1,36 @@
++#!/usr/bin/env python
++
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from dataclasses import dataclass
++from typing import Optional
++
++from ..config import TeleoperatorConfig
++
++
++@TeleoperatorConfig.register_subclass("xlerobot_vr")
++@dataclass
++class XLerobotVRTeleopConfig(TeleoperatorConfig):
++
++    
++    # VR sysytem setting
++    vr_enabled: bool = True
++    vr_connection_timeout: float = 10.0 
++    vr_data_timeout: float = 5.0  
++
++    kp : float = 1.0 
++    
++
++    xlevr_path: Optional[str] = "/your_local_DIR/XLeRobot/XLeVR" # need to be modified
+diff --git a/src/lerobot/teleoperators/xlerobot_vr/vr_monitor.py b/src/lerobot/teleoperators/xlerobot_vr/vr_monitor.py
+new file mode 100644
+index 00000000..fd5eef45
+--- /dev/null
++++ b/src/lerobot/teleoperators/xlerobot_vr/vr_monitor.py
+@@ -0,0 +1,387 @@
++#!/usr/bin/env python3
++"""
++VR Monitor - Independent VR control information monitoring script
++Can call XLeVR's VR functionality from other folders and read/print VR control information
++"""
++
++import os
++import sys
++import asyncio
++import json
++import logging
++import threading
++import http.server
++import ssl
++import socket
++from pathlib import Path
++from typing import Optional
++
++# Set the absolute path to the xlevr folder
++XLEVR_PATH = "/home/jetson8/XLeRobot/XLeVR"
++
++def setup_xlevr_environment():
++    """Setup xlevr environment"""
++    # Add xlevr path to Python path
++    if XLEVR_PATH not in sys.path:
++        sys.path.insert(0, XLEVR_PATH)
++    
++    # Set working directory
++    os.chdir(XLEVR_PATH)
++    
++    # Set environment variables
++    os.environ['PYTHONPATH'] = f"{XLEVR_PATH}:{os.environ.get('PYTHONPATH', '')}"
++
++def get_local_ip():
++    """Get the local IP address of this machine."""
++    try:
++        # Connect to a remote address to determine the local IP
++        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
++            s.connect(("8.8.8.8", 80))
++            return s.getsockname()[0]
++    except Exception:
++        try:
++            # Fallback: get hostname IP
++            return socket.gethostbyname(socket.gethostname())
++        except Exception:
++            # Final fallback
++            return "localhost"
++
++def import_xlevr_modules():
++    """Import xlevr modules"""
++    try:
++        from xlevr.config import XLeVRConfig
++        from xlevr.inputs.vr_ws_server import VRWebSocketServer
++        from xlevr.inputs.base import ControlGoal, ControlMode
++        return XLeVRConfig, VRWebSocketServer, ControlGoal, ControlMode
++    except ImportError as e:
++        print(f"Error importing xlevr modules: {e}")
++        print(f"Make sure XLEVR_PATH is correct: {XLEVR_PATH}")
++        return None, None, None, None
++
++class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
++    """Simplified HTTP request handler, only provides basic web services"""
++    
++    def end_headers(self):
++        """Add CORS headers to all responses."""
++        self.send_header('Access-Control-Allow-Origin', '*')
++        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
++        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
++        try:
++            super().end_headers()
++        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ssl.SSLError):
++            pass
++    
++    def do_OPTIONS(self):
++        """Handle preflight CORS requests."""
++        self.send_response(200)
++        self.end_headers()
++    
++    def log_message(self, format, *args):
++        """Override to reduce HTTP request logging noise."""
++        pass  # Disable default HTTP logging
++    
++    def do_GET(self):
++        """Handle GET requests."""
++        if self.path == '/' or self.path == '/index.html':
++            # Serve main page from web-ui directory
++            self.serve_file('web-ui/index.html', 'text/html')
++        elif self.path.endswith('.css'):
++            # Serve CSS files from web-ui directory
++            self.serve_file(f'web-ui{self.path}', 'text/css')
++        elif self.path.endswith('.js'):
++            # Serve JS files from web-ui directory
++            self.serve_file(f'web-ui{self.path}', 'application/javascript')
++        elif self.path.endswith('.ico'):
++            self.serve_file(self.path[1:], 'image/x-icon')
++        elif self.path.endswith(('.jpg', '.jpeg', '.png', '.gif')):
++            # Serve image files from web-ui directory
++            content_type = 'image/jpeg' if self.path.endswith(('.jpg', '.jpeg')) else 'image/png' if self.path.endswith('.png') else 'image/gif'
++            self.serve_file(f'web-ui{self.path}', content_type)
++        else:
++            self.send_error(404, "Not found")
++    
++    def serve_file(self, filename, content_type):
++        """Serve a file with the given content type."""
++        try:
++            # Get the web root path from the server
++            web_root = getattr(self.server, 'web_root_path', XLEVR_PATH)
++            file_path = os.path.join(web_root, filename)
++            
++            if os.path.exists(file_path):
++                with open(file_path, 'rb') as f:
++                    content = f.read()
++                
++                self.send_response(200)
++                self.send_header('Content-Type', content_type)
++                self.end_headers()
++                self.wfile.write(content)
++            else:
++                self.send_error(404, f"File not found: {filename}")
++        except Exception as e:
++            print(f"Error serving file {filename}: {e}")
++            self.send_error(500, "Internal server error")
++
++class SimpleHTTPSServer:
++    """Simplified HTTPS server for providing web interface"""
++    
++    def __init__(self, config):
++        self.config = config
++        self.httpd = None
++        self.server_thread = None
++        self.web_root_path = XLEVR_PATH
++    
++    async def start(self):
++        """Start the HTTPS server."""
++        try:
++            # Create server
++            self.httpd = http.server.HTTPServer((self.config.host_ip, self.config.https_port), SimpleAPIHandler)
++            
++            # Set web root path for file serving
++            self.httpd.web_root_path = self.web_root_path
++            
++            # Setup SSL
++            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++            context.load_cert_chain('cert.pem', 'key.pem')
++            self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
++            
++            # Start server in a separate thread
++            self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
++            self.server_thread.start()
++            
++            print(f"🌐 HTTPS server started on {self.config.host_ip}:{self.config.https_port}")
++            
++        except Exception as e:
++            print(f"❌ Failed to start HTTPS server: {e}")
++            raise
++    
++    async def stop(self):
++        """Stop the HTTPS server."""
++        if self.httpd:
++            self.httpd.shutdown()
++            if self.server_thread:
++                self.server_thread.join(timeout=5)
++            print("🌐 HTTPS server stopped")
++
++class VRMonitor:
++    """VR control information monitor"""
++    
++    def __init__(self):
++        self.config = None
++        self.vr_server = None
++        self.https_server = None
++        self.is_running = False
++        self.latest_goal = None  # Store the latest goal
++        self.left_goal = None    # Store left and right controller goals separately
++        self.right_goal = None
++        self.headset_goal = None  # Add headset goal
++        self._goal_lock = threading.Lock()  # Add thread lock
++    
++    def initialize(self):
++        """Initialize VR monitor"""
++        print("🔧 Initializing XLeVR Monitor...")
++        
++        # Setup environment
++        setup_xlevr_environment()
++        
++        # Import modules
++        XLeVRConfig, VRWebSocketServer, ControlGoal, ControlMode = import_xlevr_modules()
++        if XLeVRConfig is None:
++            print("❌ Failed to import xlevr modules")
++            return False
++        
++        # Create configuration
++        self.config = XLeVRConfig()
++        self.config.enable_vr = True
++        self.config.enable_keyboard = False
++        self.config.enable_https = True  # Enable HTTPS server, VR requires web interface
++        
++        # Create command queue
++        self.command_queue = asyncio.Queue()
++        
++        # Create VR server (print-only mode)
++        try:
++            self.vr_server = VRWebSocketServer(
++                command_queue=self.command_queue,
++                config=self.config,
++                print_only=False  # Changed to False to send data to queue
++            )
++        except Exception as e:
++            print(f"❌ Failed to create VR WebSocket server: {e}")
++            return False
++        
++        # Create HTTPS server
++        try:
++            self.https_server = SimpleHTTPSServer(self.config)
++        except Exception as e:
++            print(f"❌ Failed to create HTTPS server: {e}")
++            return False
++        
++        print("✅ XLeVR Monitor initialized successfully")
++        
++        return True
++    
++    async def start_monitoring(self):
++        """Start monitoring VR control information"""
++        print("🚀 Starting VR Monitor...")
++        
++        if not self.initialize():
++            print("❌ Failed to initialize VR monitor")
++            return
++        
++        try:
++            # Start HTTPS server
++            await self.https_server.start()
++            
++            # Start VR server
++            await self.vr_server.start()
++            
++            self.is_running = True
++            print("✅ VR Monitor is now running")
++            
++            # Display connection information
++            host_display = get_local_ip() if self.config.host_ip == "0.0.0.0" else self.config.host_ip
++            print(f"📱 Open your VR headset browser and navigate to:")
++            print(f"   https://{host_display}:{self.config.https_port}")
++            print("🎯 Press Ctrl+C to stop monitoring")
++            print()
++            
++            # Monitor command queue
++            await self.monitor_commands()
++            
++        except KeyboardInterrupt:
++            print("\n⏹️  Stopping VR monitor...")
++        except Exception as e:
++            print(f"❌ Error in VR monitor: {e}")
++            import traceback
++            print(f"Traceback: {traceback.format_exc()}")
++        finally:
++            await self.stop_monitoring()
++    
++    async def monitor_commands(self):
++        """Monitor commands from VR controllers"""
++        print("📊 Monitoring VR control commands...")
++        
++        while self.is_running:
++            try:
++                # Wait for command with 1-second timeout
++                goal = await asyncio.wait_for(self.command_queue.get(), timeout=1.0)
++                
++                # Save goal by arm type
++                with self._goal_lock:
++                    if goal.arm == "left":
++                        self.left_goal = goal
++                    elif goal.arm == "right":
++                        self.right_goal = goal
++                    elif goal.arm == "headset":  # Add headset data processing
++                        self.headset_goal = goal
++                    
++                    # Maintain backward compatibility, save latest goal
++                    self.latest_goal = goal
++                
++            except asyncio.TimeoutError:
++                # Timeout, continue loop
++                continue
++            except Exception as e:
++                print(f"❌ Error processing command: {e}")
++                import traceback
++                print(f"Traceback: {traceback.format_exc()}")
++    
++    def print_control_goal(self, goal):
++        """Print control goal information"""
++        print(f"\n🎮 Control Goal Received:")
++        print(f"   Timestamp: {asyncio.get_event_loop().time():.3f}")
++        print(f"   Arm: {goal.arm}")
++        print(f"   Mode: {goal.mode}")
++        
++        if goal.target_position is not None:
++            if isinstance(goal.target_position, (list, tuple)):
++                pos = goal.target_position
++                print(f"   Target Position: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
++            else:
++                print(f"   Target Position: {goal.target_position}")
++        
++        if goal.wrist_roll_deg is not None:
++            print(f"   Wrist Roll: {goal.wrist_roll_deg:.1f}°")
++        
++        if goal.wrist_flex_deg is not None:
++            print(f"   Wrist Flex: {goal.wrist_flex_deg:.1f}°")
++        
++        if goal.gripper_closed is not None:
++            print(f"   Gripper: {'CLOSED' if goal.gripper_closed else 'OPEN'}")
++        
++        if goal.metadata:
++            print(f"   Metadata: {goal.metadata}")
++        
++        print("-" * 30)
++    
++    def get_latest_goal_nowait(self, arm=None):
++        """Return the latest VR control goal if available, else None.
++        
++        Args:
++            arm: If specified ("left" or "right"), return that arm's goal.
++                 If None, return a dict containing both left and right goals.
++        """
++        with self._goal_lock:
++            if arm == "left":
++                return self.left_goal
++            elif arm == "right":
++                return self.right_goal
++            elif arm == "headset":  # Add headset data retrieval
++                return self.headset_goal
++            else:
++                # Return dictionary containing both left and right controllers
++                dual_goals = {
++                    "left": self.left_goal,
++                    "right": self.right_goal,
++                    "headset": self.headset_goal,  # Add headset data
++                    "has_left": self.left_goal is not None,
++                    "has_right": self.right_goal is not None,
++                    "has_headset": self.headset_goal is not None  # Add headset status
++                }
++                
++                return dual_goals
++    
++    def get_left_goal_nowait(self):
++        """Return the latest left arm goal if available, else None."""
++        return self.get_latest_goal_nowait("left")
++    
++    def get_right_goal_nowait(self):
++        """Return the latest right arm goal if available, else None."""
++        return self.get_latest_goal_nowait("right")
++    
++    async def stop_monitoring(self):
++        """Stop monitoring"""
++        self.is_running = False
++        
++        if self.vr_server:
++            await self.vr_server.stop()
++        
++        if self.https_server:
++            await self.https_server.stop()
++        
++        print("✅ VR Monitor stopped")
++
++def main():
++    """Main function"""
++    print("🎮 XLeVR Monitor - XLeVR VR Control Information Monitor")
++    print("=" * 60)
++    
++    # Check XLeVR path
++    if not os.path.exists(XLEVR_PATH):
++        print(f"❌ XLeVR path does not exist: {XLEVR_PATH}")
++        print("Please update XLEVR_PATH in the script")
++        return
++    
++    # Create monitor
++    monitor = VRMonitor()
++    
++    # Run monitoring
++    try:
++        asyncio.run(monitor.start_monitoring())
++    except KeyboardInterrupt:
++        print("\n👋 XLeVR Monitor stopped by user")
++    except Exception as e:
++        print(f"❌ Unexpected error: {e}")
++
++if __name__ == "__main__":
++    main() 
+\ No newline at end of file
+diff --git a/src/lerobot/teleoperators/xlerobot_vr/xlerobot_vr.py b/src/lerobot/teleoperators/xlerobot_vr/xlerobot_vr.py
+new file mode 100644
+index 00000000..c8a773c8
+--- /dev/null
++++ b/src/lerobot/teleoperators/xlerobot_vr/xlerobot_vr.py
+@@ -0,0 +1,829 @@
++#!/usr/bin/env python
++
++# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""
++XLerobot VR Teleoperator
++Refactored based on VR control logic from 8_xlerobot_VR_teleop.py, following teleop_keyboard format
++"""
++
++import asyncio
++import logging
++import os
++import sys
++import threading
++import time
++import traceback
++from queue import Queue
++from typing import Any, Dict, Optional
++
++import numpy as np
++
++# from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
++from lerobot.model.SO101Robot import SO101Kinematics
++
++from ..teleoperator import Teleoperator
++from .configuration_xlerobot_vr import XLerobotVRTeleopConfig
++
++# Setup logging
++logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
++logger = logging.getLogger(__name__)
++
++# Check VR Monitor availability
++VR_AVAILABLE = True
++try:
++    # Dynamically import VR Monitor 
++    from .vr_monitor import VRMonitor
++except ImportError as e:
++    VR_AVAILABLE = False
++    VRMonitor = None
++    logging.warning(f"VR Monitor not available: {e}")
++except Exception as e:
++    VR_AVAILABLE = False
++    VRMonitor = None
++    logging.warning(f"Could not import VR Monitor: {e}")
++
++
++# Joint mapping configurations (copied from 8_xlerobot_VR_teleop.py)
++LEFT_JOINT_MAP = {
++    "shoulder_pan": "left_arm_shoulder_pan",
++    "shoulder_lift": "left_arm_shoulder_lift",
++    "elbow_flex": "left_arm_elbow_flex",
++    "wrist_flex": "left_arm_wrist_flex",
++    "wrist_roll": "left_arm_wrist_roll",
++    "gripper": "left_arm_gripper",
++}
++
++RIGHT_JOINT_MAP = {
++    "shoulder_pan": "right_arm_shoulder_pan",
++    "shoulder_lift": "right_arm_shoulder_lift",
++    "elbow_flex": "right_arm_elbow_flex",
++    "wrist_flex": "right_arm_wrist_flex",
++    "wrist_roll": "right_arm_wrist_roll",
++    "gripper": "right_arm_gripper",
++}
++
++# Joint calibration coefficients (copied from 8_xlerobot_VR_teleop.py)
++JOINT_CALIBRATION = [
++    ['shoulder_pan', 6.0, 1.0],      
++    ['shoulder_lift', 2.0, 0.97],     
++    ['elbow_flex', 0.0, 1.05],        
++    ['wrist_flex', 0.0, 0.94],        
++    ['wrist_roll', 0.0, 0.5],        
++    ['gripper', 0.0, 1.0],           
++]
++
++class SimpleTeleopArm:
++    """
++    A class for controlling a robot arm using VR input with delta action control.
++    
++    This class provides inverse kinematics-based arm control with proportional control
++    for smooth movement and gripper operations based on VR controller input.
++    """
++    
++    def __init__(self, joint_map, initial_obs, kinematics, prefix="right", kp=1):
++        self.joint_map = joint_map
++        self.prefix = prefix
++        self.kp = kp
++        self.kinematics = kinematics
++        
++        # Initial joint positions - adapted for XLerobot observation format
++        self.joint_positions = {
++            "shoulder_pan": initial_obs[f"{prefix}_arm_shoulder_pan.pos"],
++            "shoulder_lift": initial_obs[f"{prefix}_arm_shoulder_lift.pos"],
++            "elbow_flex": initial_obs[f"{prefix}_arm_elbow_flex.pos"],
++            "wrist_flex": initial_obs[f"{prefix}_arm_wrist_flex.pos"],
++            "wrist_roll": initial_obs[f"{prefix}_arm_wrist_roll.pos"],
++            "gripper": initial_obs[f"{prefix}_arm_gripper.pos"],
++        }
++        
++        # Set initial x/y to fixed values
++        self.current_x = 0.1629
++        self.current_y = 0.1131
++        self.pitch = 0.0
++        
++        # Delta control state variables for VR input
++        self.last_vr_time = 0.0
++        self.vr_deadzone = 0.001  # Minimum movement threshold
++        self.max_delta_per_frame = 0.005  # Maximum position change per frame
++        
++        # Set step size
++        self.degree_step = 2
++        self.xy_step = 0.005
++        
++        # P control target positions, set to zero position
++        self.target_positions = {
++            "shoulder_pan": 0.0,
++            "shoulder_lift": 0.0,
++            "elbow_flex": 0.0,
++            "wrist_flex": 0.0,
++            "wrist_roll": 0.0,
++            "gripper": 0.0,
++        }
++        self.zero_pos = {
++            'shoulder_pan': 0.0,
++            'shoulder_lift': 0.0,
++            'elbow_flex': 0.0,
++            'wrist_flex': 0.0,
++            'wrist_roll': 0.0,
++            'gripper': 0.0
++        }
++
++    def move_to_zero_position(self, robot):
++        print(f"[{self.prefix}] Moving to Zero Position: {self.zero_pos} ......")
++        self.target_positions = self.zero_pos.copy()
++        
++        # Reset kinematics variables to initial state
++        self.current_x = 0.1629
++        self.current_y = 0.1131
++        self.pitch = 0.0
++        
++        # Reset delta control state
++        self.last_vr_time = 0.0
++        
++        # Explicitly set wrist_flex
++        self.target_positions["wrist_flex"] = 0.0
++        
++        action = self.p_control_action(robot)
++        return action
++
++    def handle_vr_input(self, vr_goal, gripper_state):
++        """
++        Handle VR input with delta action control - incremental position updates.
++        
++        Args:
++            vr_goal: VR controller goal data containing target position and orientations
++            gripper_state: Current gripper state (not used in current implementation)
++        """
++        if vr_goal is None:
++            return
++        
++        # VR goal contains: target_position [x, y, z], wrist_roll_deg, wrist_flex_deg, gripper_closed
++        if not hasattr(vr_goal, 'target_position') or vr_goal.target_position is None:
++            return
++            
++        # Extract VR position data
++        # Get current VR position
++        current_vr_pos = vr_goal.target_position  # [x, y, z] in meters
++        
++        # Initialize previous VR position if not set
++        if not hasattr(self, 'prev_vr_pos'):
++            self.prev_vr_pos = current_vr_pos
++            return  # Skip first frame to establish baseline
++        
++        # print(current_vr_pos)
++        
++        # Calculate relative change (delta) from previous frame
++        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * 170  # Scale for the shoulder
++        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * 80
++        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * 80
++
++        print(f'vr_x: {vr_x}, vr_y: {vr_y}, vr_z: {vr_z}')
++
++        # Update previous position for next frame
++        self.prev_vr_pos = current_vr_pos
++        
++        # Delta control parameters - adjust these for sensitivity
++        pos_scale = 0.015  # Position sensitivity scaling
++        angle_scale = 3.0  # Angle sensitivity scaling
++        delta_limit = 0.02  # Maximum delta per update (meters)
++        angle_limit = 6.0  # Maximum angle delta per update (degrees)
++        
++        delta_x = vr_x * pos_scale
++        delta_y = vr_y * pos_scale  
++        delta_z = vr_z * pos_scale
++
++        # Dead zone
++        threshold = 0.001
++        if delta_x < threshold and delta_x > -threshold:
++            delta_x = 0.0
++        if delta_y < threshold and delta_y > -threshold:
++            delta_y = 0.0
++        if delta_z < threshold and delta_z > -threshold:
++            delta_z = 0.0
++
++        # Limit delta values to prevent sudden movements
++        delta_x = max(-delta_limit, min(delta_limit, delta_x))
++        delta_y = max(-delta_limit, min(delta_limit, delta_y))
++        delta_z = max(-delta_limit, min(delta_limit, delta_z))
++        
++        self.current_x += -delta_z  # VR Z maps to robot x, change the direction
++        self.current_y += delta_y  # VR Y maps to robot y
++
++        # Handle wrist angles with delta control - use relative changes
++        if hasattr(vr_goal, 'wrist_flex_deg') and vr_goal.wrist_flex_deg is not None:
++            # Initialize previous wrist_flex if not set
++            if not hasattr(self, 'prev_wrist_flex'):
++                self.prev_wrist_flex = vr_goal.wrist_flex_deg
++                return
++            
++            # Calculate relative change from previous frame
++            delta_pitch = (vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale
++            if delta_pitch < 1 and delta_pitch > -1:
++                delta_pitch = 0.0
++            delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
++            self.pitch += delta_pitch
++            self.pitch = max(-90, min(90, self.pitch))  # Limit pitch range
++            
++            # Update previous value for next frame
++            self.prev_wrist_flex = vr_goal.wrist_flex_deg
++        
++        if hasattr(vr_goal, 'wrist_roll_deg') and vr_goal.wrist_roll_deg is not None:
++            # Initialize previous wrist_roll if not set
++            if not hasattr(self, 'prev_wrist_roll'):
++                self.prev_wrist_roll = vr_goal.wrist_roll_deg
++                return
++            
++            delta_roll = (vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale
++            delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
++
++            if delta_roll < 1 and delta_roll > -1:
++                delta_roll = 0.0
++            
++            current_roll = self.target_positions.get("wrist_roll", 0.0)
++            new_roll = current_roll + delta_roll
++            new_roll = max(-90, min(90, new_roll))  # Limit roll range
++            self.target_positions["wrist_roll"] = new_roll
++            
++            # Update previous value for next frame
++            self.prev_wrist_roll = vr_goal.wrist_roll_deg
++        
++        # VR Z axis controls shoulder_pan joint (delta control)
++        if abs(delta_x) > 0.001:  # Only update if significant movement
++            x_scale = 200.0  # Reduced scaling factor for delta control
++            delta_pan = delta_x * x_scale
++            delta_pan = max(-angle_limit, min(angle_limit, delta_pan))
++            current_pan = self.target_positions.get("shoulder_pan", 0.0)
++            new_pan = current_pan + delta_pan
++            new_pan = max(-180, min(180, new_pan))  # Limit pan range
++            self.target_positions["shoulder_pan"] = new_pan
++        
++        try:
++            joint2_target, joint3_target = self.kinematics.inverse_kinematics(self.current_x, self.current_y)
++            # Smooth transition to new joint positions, smoothing factor 0-1, lower = smoother
++            alpha = 0.1
++            self.target_positions["shoulder_lift"] = (1-alpha) * self.target_positions.get("shoulder_lift", 0.0) + alpha * joint2_target
++            self.target_positions["elbow_flex"] = (1-alpha) * self.target_positions.get("elbow_flex", 0.0) + alpha * joint3_target
++        except Exception as e:
++            print(f"[{self.prefix}] VR IK failed: {e}")
++        
++        # Calculate wrist_flex to maintain end-effector orientation
++        self.target_positions["wrist_flex"] = (-self.target_positions["shoulder_lift"] - 
++                                               self.target_positions["elbow_flex"] + self.pitch)
++   
++        # Handle gripper state directly
++        if vr_goal.metadata.get('trigger', 0) > 0.5:
++            self.target_positions["gripper"] = 45
++        else:
++            self.target_positions["gripper"] = 0.0
++
++    def p_control_action(self, robot_obs):
++        """
++        Generate proportional control action based on target positions.
++        
++        Args:
++            robot: Robot instance to get current observations
++            
++        Returns:
++            dict: Action dictionary with position commands for each joint
++        """
++        obs = robot_obs
++        current = {j: obs[f"{self.prefix}_arm_{j}.pos"] for j in self.joint_map}
++        action = {}
++        for j in self.target_positions:
++            error = self.target_positions[j] - current[j]
++            control = self.kp * error
++            action[f"{self.joint_map[j]}.pos"] = current[j] + control
++        return action
++
++
++def get_vr_base_action(vr_goal, robot):
++    """
++    Get base control commands from VR input.
++    
++    Args:
++        vr_goal: VR controller goal data containing metadata
++        robot: Robot instance for action conversion
++        
++    Returns:
++        dict: Base movement actions based on VR thumbstick input
++    """
++    pressed_keys = set()
++    if vr_goal is not None and hasattr(vr_goal, 'metadata'):
++    
++    # Build key set based on VR input (you can customize this mapping)
++    
++    # Example VR to base movement mapping - adjust according to your VR system
++    # You may need to customize these mappings based on your VR controller buttons
++        thumb = vr_goal.metadata.get('thumbstick', {})
++        if thumb:
++            thumb_x = thumb.get('x', 0)
++            thumb_y = thumb.get('y', 0)
++            if abs(thumb_x) > 0.2:
++                if thumb_x > 0:
++                    pressed_keys.add('o')  # Move backward
++                else:
++                    pressed_keys.add('u')  # Move forward
++            if abs(thumb_y) > 0.2:
++                if thumb_y > 0:
++                    pressed_keys.add('k')  # Move right
++                else:
++                    pressed_keys.add('i')  # Move backward
++    
++    # Convert to numpy array and get base action
++    keyboard_keys = np.array(list(pressed_keys))
++    base_action = robot._from_keyboard_to_base_action(keyboard_keys) or {}
++    
++    return base_action
++
++class XLerobotVRTeleop(Teleoperator):
++    """
++    XLerobot VR Teleoperator class
++    Following the format of teleop_keyboard, integrating VR control logic from 8_xlerobot_VR_teleop.py
++    """
++
++    config_class = XLerobotVRTeleopConfig
++    name = "xlerobot_vr"
++
++    def __init__(self, config: XLerobotVRTeleopConfig):
++        super().__init__(config)
++        self.config = config
++        
++        # VR system related
++        self.vr_monitor = None
++        self.vr_thread = None
++        self.vr_data_queue = Queue()
++        self.latest_vr_data = None
++        
++        # New: VR event handler
++        self.vr_event_handler = None
++                    
++        # Kinematics instances
++        self.kin_left = SO101Kinematics()
++        self.kin_right = SO101Kinematics()
++        
++        # Base speed control
++        self.current_base_speed = 0.0
++        self.last_update_time = time.time()
++        self.last_event_update_time = 0.0
++        self.is_accelerating = False
++        
++        # Status flags
++        self._connected = False
++        self._calibrated = False
++        
++        self.logs = {}
++
++    @property
++    def action_features(self) -> dict:
++        """Define action feature structure"""
++        # Define based on XLerobot's action space
++        # Including dual arm joints and base movement
++        features = {}
++        
++        # Left arm joints
++        for joint_name in LEFT_JOINT_MAP.values():
++            features[f"{joint_name}.pos"] = "float32"
++        
++        # Right arm joints
++        for joint_name in RIGHT_JOINT_MAP.values():
++            features[f"{joint_name}.pos"] = "float32"
++            
++        # Base control (according to XLerobot's base control method)
++        features["base_action"] = "dict"
++        
++        return features
++
++    @property
++    def feedback_features(self) -> dict:
++        """Define feedback feature structure"""
++        return {}  # VR controllers usually don't need feedback
++
++    @property
++    def is_connected(self) -> bool:
++        """Check connection status"""
++        return (
++            self._connected and 
++            VR_AVAILABLE and 
++            self.vr_monitor is not None and
++            (self.vr_thread is not None and self.vr_thread.is_alive())
++        )
++
++    @property
++    def is_calibrated(self) -> bool:
++        """Check calibration status"""
++        return self._calibrated
++
++    def connect(self, calibrate: bool = True, robot=None) -> None:
++        """Establish VR connection - optimized version"""
++        if self.is_connected:
++            raise RuntimeError(
++                "XLerobot VR is already connected. Do not run `connect()` twice."
++            )
++
++        if not VR_AVAILABLE:
++            raise RuntimeError(
++                "VR Monitor is not available. Please check VR system installation."
++            )
++
++        try:
++            logger.info("🔧 Initializing VR monitor...")
++            self.vr_monitor = VRMonitor()
++            
++            # Use timeout mechanism to avoid infinite waiting
++            init_success = False
++            start_time = time.time()
++            timeout = 10.0  # 10 second timeout
++            
++            while time.time() - start_time < timeout:
++                if self.vr_monitor.initialize():
++                    init_success = True
++                    break
++                time.sleep(0.1)
++            
++            if not init_success:
++                raise Exception("VR monitor initialization timeout")
++                
++            logger.info("🚀 Starting VR monitoring...")
++            self.vr_thread = threading.Thread(
++                target=lambda: asyncio.run(self.vr_monitor.start_monitoring()), 
++                daemon=True
++            )
++            self.vr_thread.start()
++            
++            # Wait for thread to start
++            time.sleep(0.5)
++            
++            if not self.vr_thread.is_alive():
++                raise Exception("VR monitoring thread failed to start")
++                
++            logger.info("✅ VR system ready")
++            self._connected = True
++            
++            # Initialize VR event handler
++            self.vr_event_handler = VREventHandler(self.vr_monitor)
++            logger.info("🎮 VR event handler initialized")
++            
++            if calibrate and robot is not None:
++                robot_obs = robot.get_observation(use_camera=False)
++                self.calibrate(robot_obs)
++                
++        except Exception as e:
++            logger.error(f"[VR] Connection failed: {e}")
++            self._connected = False
++            raise RuntimeError(f"Failed to connect to VR: {e}")
++
++    def calibrate(self, robot_obs: Optional[Dict] = None) -> None:
++        """Calibrate VR controllers - optimized version"""
++        if robot_obs is None:
++            logger.warning("[VR] No robot observation provided for calibration")
++            return
++            
++        try:
++            # Initialize arm controllers
++            self.left_arm = SimpleTeleopArm(
++                LEFT_JOINT_MAP, robot_obs, self.kin_left, 
++                prefix="left", kp=self.config.kp
++            )
++            self.right_arm = SimpleTeleopArm(
++                RIGHT_JOINT_MAP, robot_obs, self.kin_right, 
++                prefix="right", kp=self.config.kp
++            )
++            
++            logger.info("[VR] Controllers initialized successfully")
++            self._calibrated = True
++            
++        except Exception as e:
++            logger.error(f"[VR] Calibration failed: {e}")
++            self._calibrated = False
++            raise
++
++
++    def get_action(self, robot_obs: Optional[Dict] = None, robot = None) -> dict[str, Any]:
++        """Get VR control action - high-performance optimized version, parallel processing of events and actions"""
++        before_read_t = time.perf_counter()
++        
++        action = {}
++        
++        # Quick check VR monitoring status
++        if not self.vr_monitor:
++            self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
++            return action
++        
++        # Get VR data once to avoid repeated calls
++        try:
++            dual_goals = self.vr_monitor.get_latest_goal_nowait()
++            if dual_goals is None:
++                self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
++                return action
++                
++            left_goal = dual_goals.get("left")
++            right_goal = dual_goals.get("right")
++            
++        except Exception as e:
++            logger.warning(f"VR data acquisition failed: {e}")
++            self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
++            return action
++        
++        # Parallel processing: robot control at high frequency, event processing at low frequency
++        if robot_obs is not None:
++            try:
++                current_time = time.perf_counter()
++                
++                # Robot control - high frequency execution (60Hz)
++                if right_goal is not None:
++                    self.left_arm.handle_vr_input(right_goal, None)
++
++                if left_goal is not None:
++                    self.right_arm.handle_vr_input(left_goal, None)
++                    
++                
++                # Event processing - low frequency execution (10Hz), only process when interval time is reached
++                if (current_time - self.last_event_update_time) >= 2:
++                    if left_goal is not None:
++                        self._update_events_inline(left_goal)
++                    self.last_event_update_time = current_time
++                
++                # Quickly generate action dictionary
++                left_action = self.left_arm.p_control_action(robot_obs)
++                right_action = self.right_arm.p_control_action(robot_obs)
++                base_action = get_vr_base_action(right_goal, robot)
++                
++                # Efficiently merge actions
++                action.update(left_action)
++                action.update(right_action)
++                action.update(base_action)
++                
++            except Exception as e:
++                logger.error(f"Action generation failed: {e}")
++            
++        self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
++        return action
++    
++    def _update_events_inline(self, left_goal):
++        """
++        Low frequency event update - 10Hz frequency, reuse already acquired left_goal data
++        Only execute when event interval time is reached, greatly reducing processing overhead
++        """
++        if not self.vr_event_handler or not left_goal or not hasattr(left_goal, 'metadata'):
++            return
++            
++        # Directly use already acquired data, no need to call VR interface again
++        try:
++            self.vr_event_handler._process_left_controller(left_goal.metadata)
++        except Exception as e:
++            logger.debug(f"Low frequency event update failed: {e}")  # Downgrade to debug to avoid disrupting main flow
++
++    def send_feedback(self) -> None:
++        """Send feedback - optimized version, reduce blocking wait"""
++        if not self.vr_monitor:
++            logger.warning("VR monitor not available for feedback")
++            return
++
++        max_attempts = 200  # Maximum 200 attempts
++        attempt = 0
++        
++        while attempt < max_attempts:
++            try:
++                dual_goals = self.vr_monitor.get_latest_goal_nowait()
++                if dual_goals and sum(dual_goals.get('right').metadata['vr_position']):
++                    logger.info("VR controller data received")
++                    return
++                    
++            except Exception as e:
++                logger.warning(f"Error getting VR data: {e}")
++            
++            attempt += 1
++            logger.info(f'Waiting for VR controller data (attempt {attempt}/{max_attempts})')
++            time.sleep(0.5)  # Reduce wait time from 8 seconds to 0.5 seconds
++        
++        logger.warning("Timeout waiting for VR controller data")
++
++    def configure(self) -> None:
++        pass
++
++    def disconnect(self) -> None:
++        """Disconnect VR connection"""
++        if not self.is_connected:
++            raise RuntimeError(
++                "XLerobot VR is not connected."
++            )
++        
++        try:
++            if self.vr_monitor:
++                # VR Monitor usually runs in a thread, stop the thread
++                pass
++            
++            self._connected = False
++            self._calibrated = False
++            print("[VR] Disconnected")
++            
++        except Exception as e:
++            print(f"[VR] Error during disconnect: {e}")
++
++    def move_to_zero_position(self, robot):
++        """Move all controllers to zero position"""
++        robot_obs = robot.get_observation(use_camera=False)
++        action = {}
++        left_action = self.left_arm.move_to_zero_position(robot_obs)
++        right_action = self.right_arm.move_to_zero_position(robot_obs)
++        base_action = get_vr_base_action(None, robot)
++        action.update(left_action)
++        action.update(right_action)
++        action.update(base_action)
++
++        return action
++    
++    def get_vr_events(self):
++        """Get VR event status (high-performance version - use cache to avoid repeated VR data acquisition)"""
++        if self.vr_event_handler:
++            # Get current event status
++            events = self.vr_event_handler.get_events()
++            
++            # Automatically reset one-time events to prevent infinite loops
++            # Only reset when event is True to avoid affecting normal state
++            if events.get("exit_early", False) or events.get("rerecord_episode", False):
++                self.vr_event_handler.reset_events()
++            
++            return events
++        else:
++            # Return default event status
++            return {
++                "exit_early": False,
++                "rerecord_episode": False,
++                "stop_recording": False,
++                "reset_position": False,
++                "back_position": False,
++            }
++    
++    def reset_vr_events(self):
++        """Reset VR event status"""
++        if self.vr_event_handler:
++            self.vr_event_handler.reset_events()
++    
++    def print_vr_control_guide(self):
++        """Print VR control guide"""
++        if self.vr_event_handler:
++            self.vr_event_handler.print_control_guide()
++        else:
++            logger.info("VR event handler not initialized")
++
++
++def init_vr_listener(teleop_vr):
++    """
++    Initialize VR listener, providing the same interface as init_keyboard_listener
++    Used to replace keyboard event listening, used in record.py
++    
++    Args:
++        teleop_vr: XLerobotVRTeleop instance
++        
++    Returns:
++        tuple: (listener, events) - same return format as init_keyboard_listener
++    """
++    if not isinstance(teleop_vr, XLerobotVRTeleop):
++        logger.error("teleop_vr must be an XLerobotVRTeleop instance")
++        return None, {
++            "exit_early": False,
++            "rerecord_episode": False,
++            "stop_recording": False,
++            "reset_position": False,
++            "back_position": False,
++        }
++    
++    # Print control guide
++    teleop_vr.print_vr_control_guide()
++    
++    # Create virtual listener object (compatible with keyboard listener)
++    class VRListener:
++        def __init__(self, teleop_vr):
++            self.teleop_vr = teleop_vr
++            self.is_alive = True
++            
++        def stop(self):
++            self.is_alive = False
++            logger.info("VR listener stopped")
++    
++    vr_listener = VRListener(teleop_vr)
++    
++    # Get initial event status
++    events = teleop_vr.get_vr_events()
++    
++    return vr_listener, events
++
++class VREventHandler:
++    """
++    VR event handler, specifically handles recording control events
++    Use left VR controller to replace keyboard control
++    """
++    
++    def __init__(self, vr_monitor):
++        self.vr_monitor = vr_monitor
++        self.events = {
++            "exit_early": False,      # Left controller right: Exit loop early (original right arrow key)
++            "rerecord_episode": False, # Left controller left: Re-record episode (original left arrow key)
++            "stop_recording": False,   # Left controller up: Stop recording (original ESC key)
++            "reset_position": False,   # Left controller down: Reset robot (new feature)
++            "back_position": False,    # In the bucket (new feature)
++        }
++        self.prev_states = {
++            'thumbstick_x': 0,
++            'thumbstick_y': 0,
++            'trigger': False,
++            'button_a': False,
++            'button_b': False,
++        }
++        self.threshold = 0.7  # Thumbstick trigger threshold
++        
++    def update_events(self):
++        """Update VR event status"""
++        if not self.vr_monitor:
++            return self.events
++            
++        try:
++            dual_goals = self.vr_monitor.get_latest_goal_nowait()
++            if not dual_goals:
++                return self.events
++                
++            left_goal = dual_goals.get("left")
++            if not left_goal or not hasattr(left_goal, 'metadata'):
++                return self.events
++                
++            self._process_left_controller(left_goal.metadata)
++            
++        except Exception as e:
++            logger.error(f"VR事件更新失败: {e}")
++            
++        return self.events
++    
++    def _process_left_controller(self, metadata):
++        """处理左手柄输入"""
++        # 获取摇杆输入
++        thumb = metadata.get('thumbstick', {})
++        thumb_x = thumb.get('x', 0)
++        thumb_y = thumb.get('y', 0)
++
++        
++        # Detect thumbstick direction events (only trigger when crossing threshold)
++        if thumb_x > self.threshold and self.prev_states['thumbstick_x'] <= self.threshold:
++            logger.info("🎮 VR left controller right -> Exit loop early")
++            self.events["exit_early"] = True
++            
++        elif thumb_x < -self.threshold or self.events['rerecord_episode'] == True:
++            logger.info("🎮 VR left controller left -> Re-record episode")
++            self.events["rerecord_episode"] = True
++            self.events["exit_early"] = True
++            
++        if thumb_y > self.threshold and self.prev_states['thumbstick_y'] <= self.threshold:
++            logger.info("🎮 VR left controller up -> Stop recording")
++            self.events["stop_recording"] = True
++            self.events["exit_early"] = True
++            # self.events["back_position"] = True
++
++        elif thumb_y < -self.threshold and self.prev_states['thumbstick_y'] >= -self.threshold:
++            logger.info("🎮 VR left controller down -> Reset robot")
++            self.events["reset_position"] = True
++        else:
++            self.events["reset_position"] = False  # Reset event is instantaneous
++            self.events["back_position"] = False
++        
++        # Detect trigger key events
++        trigger = metadata.get('trigger', 0) > 0.5
++        
++        # Update status
++        self.prev_states.update({
++            'thumbstick_x': thumb_x,
++            'thumbstick_y': thumb_y,
++            'trigger': trigger,
++        })
++    
++    def reset_events(self):
++        """Reset all event status"""
++        for key in self.events:
++            self.events[key] = False
++    
++    def get_events(self):
++        """Get current event status"""
++        return self.events.copy()
++    
++    def print_control_guide(self):
++        """Print VR control guide"""
++        guide = """
++        🎮 VR Left Controller Guide:
++        ├── 👈 Push thumbstick left: Re-record current episode
++        ├── 👉 Push thumbstick right: Exit current loop early
++        ├── 👆 Push thumbstick up: Stop recording
++        ├── 👇 Push thumbstick down: Reset robot position
++        """
++        logger.info(guide)
+\ No newline at end of file
+diff --git a/src/lerobot/utils/robot_utils.py b/src/lerobot/utils/robot_utils.py
+index 42abcdda..1aed3c89 100644
+--- a/src/lerobot/utils/robot_utils.py
++++ b/src/lerobot/utils/robot_utils.py
+@@ -27,3 +27,31 @@ def busy_wait(seconds):
+         # On Linux time.sleep is accurate
+         if seconds > 0:
+             time.sleep(seconds)
++
++
++def precise_sleep(seconds: float, spin_threshold: float = 0.010, sleep_margin: float = 0.003):
++    """
++    Wait for `seconds` with better precision than time.sleep alone at the expense of more CPU usage.
++
++    Parameters:
++      - seconds: duration to wait
++      - spin_threshold: if remaining <= spin_threshold -> spin; otherwise sleep (seconds). Default 10ms
++      - sleep_margin: when sleeping leave this much time before deadline to avoid oversleep. Default 3ms
++
++    Note:
++        The default parameters are chosen to prioritize timing accuracy over CPU usage for the common 30 FPS use case.
++    """
++    if seconds <= 0:
++        return
++
++    system = platform.system()
++    if system in ("Darwin", "Windows"):
++        end_time = time.perf_counter() + seconds
++        while True:
++            remaining = end_time - time.perf_counter()
++            if remaining <= 0:
++                break
++            if remaining > spin_threshold:
++                time.sleep(max(remaining - sleep_margin, 0))
++    else:
++        time.sleep(seconds)

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.bak
+*.zip
+meal_service/logs/
+__pycache__/
+*.pyc
+meal_service/logs/
+meal_service/outputs/

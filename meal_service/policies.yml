@@ -1,0 +1,80 @@
+# policies.yml
+# Which trained policy runs where. Each run is one `lerobot-rollout` process,
+# one policy at a time (hardware settings: rollout.yml).
+#
+# Job flow:
+#   base -> kitchen (place B): plate_pickup, then the product's policy
+#        -> table   (place C): the product's serve_policy
+#        -> base (or straight on to the next job)
+#
+# Fields:
+#   policy_id          products: MUST equal the meal_type the admin panel sends
+#   arm                right | left  -> port, robot.id, cameras from rollout.yml
+#   policy_path        the .../checkpoints/<step>/pretrained_model folder
+#                      null = not trained: a job with this product is marked
+#                      failed before the robot moves; plate_pickup / serve
+#                      steps with null are just skipped
+#   task_instruction   --dataset.single_task
+#   execution_seconds  how long the policy runs at the stop (default 60)
+#   serve_policy       products only: the policy run at the table for it
+#   extra_args         optional extra lerobot-rollout flags for this policy
+#
+# Fill in the 3 right-arm and 2 left-arm products you trained: set their
+# policy_path, arm and serve_policy. dessert_banana is filled as an example.
+
+policies:
+  # --- place B (kitchen) ---------------------------------------------------
+  - policy_id: plate_pickup
+    policy_path: null            # no separate plate pickup in the current pipeline
+
+  - policy_id: cucumber_left
+    arm: left
+    policy_path: /home/jetson8/trained_policies/act_left_cucumber/checkpoints/020000/pretrained_model
+    task_instruction: "Picking up a cucumber using left arm"
+    execution_seconds: 27
+    serve_policy: bowl_serve_left
+
+  - policy_id: corn_right
+    arm: right
+    policy_path: /home/jetson8/trained_policies/act_right_yellow/checkpoints/030000/pretrained_model            # e.g. /home/jetson8/act_right_arm_<name>/checkpoints/030000/pretrained_model
+    task_instruction: "Picking up a corn using right arm"
+    execution_seconds: 30
+    serve_policy: bowl_serve_right
+
+  - policy_id: butter_right
+    arm: right
+    policy_path: /home/jetson8/trained_policies/act_right_yellow/checkpoints/030000/pretrained_model
+    task_instruction: "Picking up a butter using right arm"
+    execution_seconds: 27
+    serve_policy: bowl_serve_right
+
+  - policy_id: banana_right
+    arm: right
+    policy_path: /home/jetson8/trained_policies/act_right_yellow/checkpoints/030000/pretrained_model
+    task_instruction: "Picking up a banana using right arm"
+    execution_seconds: 27
+    serve_policy: bowl_serve_right
+
+  - policy_id: carrot_left
+    arm: left
+    policy_path: /home/jetson8/trained_policies/act_left_carrot/checkpoints/030000/pretrained_model
+    task_instruction: "Picking up a carrot using left arm"
+    execution_seconds: 27
+    serve_policy: bowl_serve_left
+
+
+  # --- place C (table) -----------------------------------------------------
+  - policy_id: bowl_serve_right
+    arm: right
+    policy_path: /home/jetson8/trained_policies/act_right_bowl/checkpoints/050000/pretrained_model            # right-arm serve checkpoint
+    task_instruction: "Put the bowl on table using right arm"   # use the task string you recorded with
+    execution_seconds: 23
+
+  - policy_id: bowl_serve_left
+    arm: left
+    policy_path: /home/jetson8/trained_policies/act_left_bowl/checkpoints/030000/pretrained_model            # left-arm serve checkpoint
+    task_instruction: "Put the bowl on table using left arm"
+    execution_seconds: 23
+
+  - policy_id: plate_serve       # used for products without a serve_policy
+    policy_path: null

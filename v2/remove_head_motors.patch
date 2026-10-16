@@ -1,0 +1,390 @@
+Only in new: __pycache__
+diff -u --recursive orig/record.py new/record.py
+--- a/src/lerobot/record.py
++++ b/src/lerobot/record.py
+@@ -152,7 +152,7 @@
+     
+     if start_position is None:
+         left_trajectory = torch.from_numpy(
+-            np.linspace(left_current_position, np.concatenate((left_target_position, left_current_position[-2:])), steps)
++            np.linspace(left_current_position, left_target_position, steps)
+         )
+         right_trajectory = torch.from_numpy(
+             np.linspace(right_current_position[:-3], right_target_position, steps)
+@@ -184,25 +184,16 @@
+         'right_arm_wrist_roll.pos',
+         'right_arm_gripper.pos'
+     ]
+-    if start_position is None:
+-        left_current_position_dict += ['head_motor_1.pos', 'head_motor_2.pos']
+     for left_pose, right_pose in zip(left_trajectory, right_trajectory):
+         left_action_dict = dict(zip(left_current_position_dict, left_pose, strict=False))
+         right_action_dict = dict(zip(right_current_position_dict, right_pose, strict=False))
+-        if start_position is None:
+-            head_motor_dict = {}
+-        else:
+-            head_motor_dict = {
+-                'head_motor_1.pos': 8.982,
+-                'head_motor_2.pos': 28.8703,
+-            }
+         base_action_dict = {
+             "x.vel": 0,
+             "y.vel": 0,
+             "theta.vel": 0,
+         }
+         
+-        action_dict = {**left_action_dict, **head_motor_dict, **right_action_dict, **base_action_dict}
++        action_dict = {**left_action_dict, **right_action_dict, **base_action_dict}
+         action_sequence.append(action_dict)
+     
+     return action_sequence
+Only in new/robots/xlerobot: __pycache__
+diff -u --recursive orig/robots/xlerobot/config_xlerobot.py new/robots/xlerobot/config_xlerobot.py
+--- a/src/lerobot/robots/xlerobot/config_xlerobot.py
++++ b/src/lerobot/robots/xlerobot/config_xlerobot.py
+@@ -51,8 +51,8 @@
+ @dataclass
+ class XLerobotConfig(RobotConfig):
+     
+-    port1: str = "/dev/ttyACM0"  # port to connect to the bus (so101 + head camera)
+-    port2: str = "/dev/ttyACM1"  # port to connect to the bus (same as lekiwi setup)
++    port1: str = "/dev/ttyACM0"  # port to connect to the bus (left so101 arm only)
++    port2: str = "/dev/ttyACM1"  # port to connect to the bus (right so101 arm + lekiwi base)
+     disable_torque_on_disconnect: bool = True
+ 
+     # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+diff -u --recursive orig/robots/xlerobot/xlerobot.py new/robots/xlerobot/xlerobot.py
+--- a/src/lerobot/robots/xlerobot/xlerobot.py
++++ b/src/lerobot/robots/xlerobot/xlerobot.py
+@@ -68,8 +68,6 @@
+                 "left_arm_wrist_flex": self.calibration.get("left_arm_wrist_flex"),
+                 "left_arm_wrist_roll": self.calibration.get("left_arm_wrist_roll"),
+                 "left_arm_gripper": self.calibration.get("left_arm_gripper"),
+-                "head_motor_1": self.calibration.get("head_motor_1"),
+-                "head_motor_2": self.calibration.get("head_motor_2"),
+             }
+         else:
+             calibration1 = self.calibration
+@@ -84,9 +82,6 @@
+                 "left_arm_wrist_flex": Motor(4, "sts3215", norm_mode_body),
+                 "left_arm_wrist_roll": Motor(5, "sts3215", norm_mode_body),
+                 "left_arm_gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
+-                # head
+-                "head_motor_1": Motor(7, "sts3215", norm_mode_body),
+-                "head_motor_2": Motor(8, "sts3215", norm_mode_body),
+             },
+             calibration= calibration1,
+         )
+@@ -123,7 +118,6 @@
+         )
+         self.left_arm_motors = [motor for motor in self.bus1.motors if motor.startswith("left_arm")]
+         self.right_arm_motors = [motor for motor in self.bus2.motors if motor.startswith("right_arm")]
+-        self.head_motors = [motor for motor in self.bus1.motors if motor.startswith("head")]
+         self.base_motors = [motor for motor in self.bus2.motors if motor.startswith("base")]
+         self.cameras = make_cameras_from_configs(config.cameras)
+ 
+@@ -143,8 +137,6 @@
+                 "right_arm_wrist_flex.pos",
+                 "right_arm_wrist_roll.pos",
+                 "right_arm_gripper.pos",
+-                "head_motor_1.pos",
+-                "head_motor_2.pos",
+                 "x.vel",
+                 "y.vel",
+                 "theta.vel",
+@@ -224,18 +216,18 @@
+     def calibrate(self) -> None:
+         logger.info(f"\nRunning calibration of {self}")
+         ## calib left motors
+-        left_motors = self.left_arm_motors + self.head_motors
++        left_motors = self.left_arm_motors
+         self.bus1.disable_torque()
+         for name in left_motors:
+             self.bus1.write("Operating_Mode", name, OperatingMode.POSITION.value)
+         input(
+-            "Move left arm and head motors to the middle of their range of motion and press ENTER...."
++            "Move left arm motors to the middle of their range of motion and press ENTER...."
+         )
+         homing_offsets = self.bus1.set_half_turn_homings(left_motors)
+         homing_offsets.update(dict.fromkeys(self.right_arm_motors + self.base_motors, 0))
+         
+         print(
+-            f"Move all left arm and head joints sequentially through their "
++            f"Move all left arm joints sequentially through their "
+             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
+         )
+         range_mins, range_maxes = self.bus1.record_ranges_of_motion(left_motors)
+@@ -318,14 +310,6 @@
+             self.bus1.write("I_Coefficient", name, 0)
+             self.bus1.write("D_Coefficient", name, 43)
+         
+-        for name in self.head_motors:
+-            self.bus1.write("Operating_Mode", name, OperatingMode.POSITION.value)
+-            # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
+-            self.bus1.write("P_Coefficient", name, 16)
+-            # Set I_Coefficient and D_Coefficient to default value 0 and 32
+-            self.bus1.write("I_Coefficient", name, 0)
+-            self.bus1.write("D_Coefficient", name, 43)
+-        
+         for name in self.right_arm_motors:
+             self.bus2.write("Operating_Mode", name, OperatingMode.POSITION.value)
+             # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
+@@ -343,7 +327,7 @@
+         
+ 
+     def setup_motors(self) -> None:
+-        for motor in chain(reversed(self.left_arm_motors), reversed(self.head_motors)):
++        for motor in reversed(self.left_arm_motors):
+             input(f"Connect the controller board to the '{motor}' motor only and press enter.")
+             self.bus1.setup_motor(motor)
+             print(f"'{motor}' motor id set to {self.bus1.motors[motor].id}")
+@@ -516,8 +500,6 @@
+             theta_cmd -= theta_speed
+             
+         return {
+-            # "head_motor_1.pos": 0.0,  # Head motors are not controlled by keyboard
+-            # "head_motor_2.pos": 0.0,  # TODO: implement head control
+             "x.vel": x_cmd, 
+             "y.vel": y_cmd,
+             "theta.vel": theta_cmd,
+@@ -531,7 +513,6 @@
+         start = time.perf_counter()
+         left_arm_pos = self.bus1.sync_read("Present_Position", self.left_arm_motors)
+         right_arm_pos = self.bus2.sync_read("Present_Position", self.right_arm_motors)
+-        head_pos = self.bus1.sync_read("Present_Position", self.head_motors)
+         base_wheel_vel = self.bus2.sync_read("Present_Velocity", self.base_motors)
+         
+         base_vel = self._wheel_raw_to_body(
+@@ -542,7 +523,6 @@
+         
+         left_arm_state = {f"{k}.pos": v for k, v in left_arm_pos.items()}
+         right_arm_state = {f"{k}.pos": v for k, v in right_arm_pos.items()}
+-        head_state = {f"{k}.pos": v for k, v in head_pos.items()}
+         dt_ms = (time.perf_counter() - start) * 1e3
+         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+ 
+@@ -550,7 +530,7 @@
+         camera_obs = self.get_camera_observation()
+ 
+         # Combine all observations
+-        obs_dict = {**left_arm_state, **right_arm_state, **head_state, **base_vel, **camera_obs}
++        obs_dict = {**left_arm_state, **right_arm_state, **base_vel, **camera_obs}
+ 
+         return obs_dict
+     
+@@ -582,7 +562,6 @@
+         
+         left_arm_pos = {k: v for k, v in action.items() if k.startswith("left_arm_") and k.endswith(".pos")}
+         right_arm_pos = {k: v for k, v in action.items() if k.startswith("right_arm_") and k.endswith(".pos")}
+-        head_pos = {k: v for k, v in action.items() if k.startswith("head_") and k.endswith(".pos")}
+         base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+         base_wheel_goal_vel = self._body_to_wheel_raw(
+             base_goal_vel.get("x.vel", 0.0),
+@@ -592,42 +571,36 @@
+         
+         
+         if self.config.max_relative_target is not None:
+-            # Read present positions for left arm, right arm, and head
++            # Read present positions for left arm and right arm
+             present_pos_left = self.bus1.sync_read("Present_Position", self.left_arm_motors)
+             present_pos_right = self.bus2.sync_read("Present_Position", self.right_arm_motors)
+-            present_pos_head = self.bus1.sync_read("Present_Position", self.head_motors)
+ 
+             # Combine all present positions
+-            present_pos = {**present_pos_left, **present_pos_right, **present_pos_head}
++            present_pos = {**present_pos_left, **present_pos_right}
+ 
+-            # Ensure safe goal position for each arm and head
++            # Ensure safe goal position for each arm
+             goal_present_pos = {
+-                key: (g_pos, present_pos[key]) for key, g_pos in chain(left_arm_pos.items(), right_arm_pos.items(), head_pos.items())
++                key: (g_pos, present_pos[key]) for key, g_pos in chain(left_arm_pos.items(), right_arm_pos.items())
+             }
+             safe_goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+ 
+             # Update the action with the safe goal positions
+             left_arm_pos = {k: v for k, v in safe_goal_pos.items() if k in left_arm_pos}
+             right_arm_pos = {k: v for k, v in safe_goal_pos.items() if k in right_arm_pos}
+-            head_pos = {k: v for k, v in safe_goal_pos.items() if k in head_pos}
+         
+         left_arm_pos_raw = {k.replace(".pos", ""): v for k, v in left_arm_pos.items()}
+         right_arm_pos_raw = {k.replace(".pos", ""): v for k, v in right_arm_pos.items()}
+-        head_pos_raw = {k.replace(".pos", ""): v for k, v in head_pos.items()}
+         
+         # Only sync_write if there are motors to write to
+         if left_arm_pos_raw:
+             self.bus1.sync_write("Goal_Position", left_arm_pos_raw)
+         if right_arm_pos_raw:
+             self.bus2.sync_write("Goal_Position", right_arm_pos_raw)
+-        if head_pos_raw:
+-            self.bus1.sync_write("Goal_Position", head_pos_raw)
+         if base_wheel_goal_vel:
+             self.bus2.sync_write("Goal_Velocity", base_wheel_goal_vel)
+         return {
+             **left_arm_pos,
+             **right_arm_pos,
+-            **head_pos,
+             **base_goal_vel,
+         }
+ 
+diff -u --recursive orig/robots/xlerobot/xlerobot_client.py new/robots/xlerobot/xlerobot_client.py
+--- a/src/lerobot/robots/xlerobot/xlerobot_client.py
++++ b/src/lerobot/robots/xlerobot/xlerobot_client.py
+@@ -84,8 +84,6 @@
+                 "right_arm_wrist_flex.pos",
+                 "right_arm_wrist_roll.pos",
+                 "right_arm_gripper.pos",
+-                "head_motor_1.pos",
+-                "head_motor_2.pos",
+                 "x.vel",
+                 "y.vel",
+                 "theta.vel",
+@@ -303,8 +301,6 @@
+             theta_cmd -= theta_speed
+             
+         return {
+-            # "head_motor_1.pos": 0.0,  # Head motors are not controlled by keyboard
+-            # "head_motor_2.pos": 0.0,  # TODO: implement head control
+             "x.vel": x_cmd, 
+             "y.vel": y_cmd,
+             "theta.vel": theta_cmd,
+Only in new/teleoperators/xlerobot_vr: __pycache__
+diff -u --recursive orig/teleoperators/xlerobot_vr/xlerobot_vr.py new/teleoperators/xlerobot_vr/xlerobot_vr.py
+--- a/src/lerobot/teleoperators/xlerobot_vr/xlerobot_vr.py
++++ b/src/lerobot/teleoperators/xlerobot_vr/xlerobot_vr.py
+@@ -75,11 +75,6 @@
+     "gripper": "right_arm_gripper",
+ }
+ 
+-HEAD_MOTOR_MAP = {
+-    "head_motor_1": "head_motor_1",
+-    "head_motor_2": "head_motor_2",
+-}
+-
+ # Joint calibration coefficients (copied from 8_xlerobot_VR_teleop.py)
+ JOINT_CALIBRATION = [
+     ['shoulder_pan', 6.0, 1.0],      
+@@ -314,67 +309,6 @@
+         return action
+ 
+ 
+-class SimpleHeadControl:
+-    """
+-    A class for controlling robot head motors using VR thumbstick input.
+-    
+-    Provides simple head movement control with proportional control for smooth operation.
+-    """
+-    
+-    def __init__(self, initial_obs, kp=1):
+-        self.kp = kp
+-        self.degree_step = 2  # Move 2 degrees each time
+-        # Initialize head motor positions
+-        self.target_positions = {
+-            "head_motor_1": initial_obs.get("head_motor_1.pos", 0.0),
+-            "head_motor_2": initial_obs.get("head_motor_2.pos", 0.0),
+-        }
+-        self.zero_pos = {"head_motor_1": 0.0, "head_motor_2": 0.0}
+-
+-    def handle_vr_input(self, vr_goal):
+-        # Map VR input to head motor targets
+-        thumb = vr_goal.metadata.get('thumbstick', {})
+-        if thumb:
+-            thumb_x = thumb.get('x', 0)
+-            thumb_y = thumb.get('y', 0)
+-            if abs(thumb_x) > 0.1:
+-                if thumb_x > 0:
+-                    self.target_positions["head_motor_1"] += self.degree_step
+-                else:
+-                    self.target_positions["head_motor_1"] -= self.degree_step
+-            if abs(thumb_y) > 0.1:
+-                if thumb_y > 0:
+-                    self.target_positions["head_motor_2"] += self.degree_step
+-                else:
+-                    self.target_positions["head_motor_2"] -= self.degree_step
+-                    
+-    def move_to_zero_position(self, robot_obs):
+-        print(f"[HEAD] Moving to Zero Position: {self.zero_pos} ......")
+-        self.target_positions = self.zero_pos.copy()
+-        action = self.p_control_action(robot_obs)
+-        return action
+-        
+-
+-    def p_control_action(self, robot_obs):
+-        """
+-        Generate proportional control action for head motors.
+-        
+-        Args:
+-            robot: Robot instance to get current observations
+-            
+-        Returns:
+-            dict: Action dictionary with position commands for head motors
+-        """
+-        obs = robot_obs
+-        action = {}
+-        for motor in self.target_positions:
+-            current = obs.get(f"{HEAD_MOTOR_MAP[motor]}.pos", 0.0)
+-            error = self.target_positions[motor] - current
+-            control = self.kp * error
+-            action[f"{HEAD_MOTOR_MAP[motor]}.pos"] = current + control
+-        return action
+-
+-
+ def get_vr_base_action(vr_goal, robot):
+     """
+     Get base control commands from VR input.
+@@ -456,7 +390,7 @@
+     def action_features(self) -> dict:
+         """Define action feature structure"""
+         # Define based on XLerobot's action space
+-        # Including dual arm joints, head motors, base movement
++        # Including dual arm joints and base movement
+         features = {}
+         
+         # Left arm joints
+@@ -467,10 +401,6 @@
+         for joint_name in RIGHT_JOINT_MAP.values():
+             features[f"{joint_name}.pos"] = "float32"
+             
+-        # Head motors
+-        for motor_name in HEAD_MOTOR_MAP.values():
+-            features[f"{motor_name}.pos"] = "float32"
+-            
+         # Base control (according to XLerobot's base control method)
+         features["base_action"] = "dict"
+         
+@@ -572,9 +502,6 @@
+                 prefix="right", kp=self.config.kp
+             )
+             
+-            # Initialize head controller
+-            self.head_control = SimpleHeadControl(robot_obs, kp=self.config.kp)
+-            
+             logger.info("[VR] Controllers initialized successfully")
+             self._calibrated = True
+             
+@@ -631,13 +558,11 @@
+                 # Quickly generate action dictionary
+                 left_action = self.left_arm.p_control_action(robot_obs)
+                 right_action = self.right_arm.p_control_action(robot_obs)
+-                head_action = self.head_control.p_control_action(robot_obs)
+                 base_action = get_vr_base_action(right_goal, robot)
+                 
+                 # Efficiently merge actions
+                 action.update(left_action)
+                 action.update(right_action)
+-                action.update(head_action)
+                 action.update(base_action)
+                 
+             except Exception as e:
+@@ -713,11 +638,9 @@
+         action = {}
+         left_action = self.left_arm.move_to_zero_position(robot_obs)
+         right_action = self.right_arm.move_to_zero_position(robot_obs)
+-        head_action = self.head_control.move_to_zero_position(robot_obs)
+         base_action = get_vr_base_action(None, robot)
+         action.update(left_action)
+         action.update(right_action)
+-        action.update(head_action)
+         action.update(base_action)
+ 
+         return action

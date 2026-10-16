@@ -1,0 +1,33 @@
+# locations.yml
+# location_coordinates format TBD per the spec ("[to be confirmed]") —
+# using {x, y, theta} here as a placeholder, matching the earlier
+# fillottaks locations.yaml convention. Update to match whatever your
+# actual nav stack expects (Nav2 pose, AprilTag pose, etc).
+
+locations:
+  - location_id: home_location
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: plate_pickup
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: meal_slot_1
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: meal_slot_2
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: meal_slot_3
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: meal_slot_4
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: seat_1
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: seat_2
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
+
+  - location_id: seat_3
+    location_coordinates: {x: 0.0, y: 0.0, theta: 0.0}
